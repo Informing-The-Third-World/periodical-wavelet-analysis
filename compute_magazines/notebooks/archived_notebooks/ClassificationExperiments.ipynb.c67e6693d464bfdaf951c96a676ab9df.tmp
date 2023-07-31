@@ -1,0 +1,10 @@
+revolutionary_terms = ["third world", "revolution", "liberation", "imperialism"]
+
+counts_ao = arab_observer_df.copy()
+counts_tb = tricontinental_bulletin_df.copy()
+import re
+counts_ao['struggle_counts'] = counts_ao['text'].str.count('struggle')
+counts_tb['struggle_counts'] = counts_tb['text'].str.count('struggle')
+counts_ao[['periodical_name', 'struggle_counts', 'cleaned_issue_date', 'page_number']].groupby(['periodical_name', 'cleaned_issue_date'])['struggle_counts'].sum().reset_index().sort_values(by='cleaned_issue_date', ascending=True)
+counts_tb[['periodical_name', 'struggle_counts', 'cleaned_issue_date', 'page_number']].groupby(['periodical_name', 'cleaned_issue_date'])[
+    'struggle_counts'].sum().reset_index().sort_values(by=['cleaned_issue_date'], ascending=True)
