@@ -1,8 +1,9 @@
-import pandas as pd 
-from htrc_features import FeatureReader
+
 import os
-from progress.bar import IncrementalBar
-from thefuzz import fuzz
+import pandas as pd
+from tqdm import tqdm
+from fuzzywuzzy import fuzz
+from htrc_features import FeatureReader
 from datetime import datetime
 
 def transform_annotated_dates(rows):
@@ -144,51 +145,83 @@ def add_volumes_dates(title, file_name, magazine_title, date_vols):
     
 #     final_df.to_csv(title + '_grouped.csv')
 
-def process_metadatas():
-    '''This function is used to process the metadata files (i.e. the htids) and combine them with the annotated files. It reads in the metadata files and then calls the read_ids function.'''
+
+def process_metadatas(extracted_features_output_dir: str) -> None:
+    """
+    Process metadata files and combine them with annotated files.
+
+    This function reads metadata files from the specified directory, processes them,
+    and combines them with annotated files. It then calls the read_ids function to
+    further process the data.
+
+    Args:
+        extracted_features_output_dir (str): The directory containing the extracted features.
+    """
     # Get all directories of hathi_ef_datasets
-    dir_list = [subdir for subdir, _, _ in os.walk('../datasets/ht_ef_datasets/')]
-    annotated_mapping_df = pd.read_csv('../datasets/mapping_files/annotation_metadata_mapping.csv')
+    dir_list = [subdir.replace(extracted_features_output_dir, '') for subdir, _, _ in os.walk(extracted_features_output_dir)]
+    subset_dir_list = [d for d in dir_list if d.count(os.sep) == 1]
+    # Read the annotated mapping file
+    annotated_mapping_output_path = os.path.join('..', 'datasets', 'mapping_files', 'annotation_metadata_mapping.csv')
+    annotated_mapping_df = pd.read_csv(annotated_mapping_output_path)
     dfs = []
-    
-    for subdir, _, files in os.walk('../datasets/metadatas'):
-        get_files = IncrementalBar('processing metadata', max=len(files))
+
+    # Iterate over all metadata files
+    metadata_output_path = os.path.join('..', 'datasets', 'metadatas')
+    for subdir, _, files in tqdm(os.walk(metadata_output_path)):
         for f in files:
-            get_files.next()
-            if '.csv' in f:
+            if f.endswith('.csv'):
+                print(f'Processing {f}...')
                 # Get relevant annotation file
-                annotation_row = annotated_mapping_df.loc[annotated_mapping_df['metadata_file'] == subdir + '/' + f].copy()
-                # Start creating file name and joining directories for files
-                file_name = f.split('.')[0]
-                filenames = file_name.split('_')
-                filenames = [ fi for fi in filenames if fi.isdigit() == False]
-
-                filenames = '_'.join(filenames)
-                # print(filenames)
-                md = pd.read_csv(subdir+ '/'+f, encoding = "utf-8")
-                annotated_df = pd.read_csv(annotation_row.annotation_file.values[0])
+                annotation_row = annotated_mapping_df.loc[annotated_mapping_df['metadata_file'] == f].copy()
+                # Create file name and join directories for files
+                file_name = f.rsplit('.', 1)[0]
+                filenames = '_'.join([fi for fi in file_name.split('_') if not fi.isdigit()])
+                
+                # Read metadata and annotation files
+                md = pd.read_csv(os.path.join(subdir, f), encoding="utf-8")
+                annotation_output_path = os.path.join("..", "datasets", "annotated_datasets", annotation_row.annotation_file.values[0])
+                annotated_df = pd.read_csv(annotation_output_path, encoding="utf-8")
+                
                 final_dir = ''
-                for dir_name in dir_list:
-                    dirnames = dir_name.split('/')[-1].split('_')
-                    dirnames = [ di.lower() for di in dirnames if di.isdigit() == False]
-                    dirnames = '_'.join(dirnames)
-                    dirnames = dirnames.split('_hathitrust')[0]
-                    fuzziness =fuzz.ratio(filenames, dirnames)
+                for dir_name in subset_dir_list:
+                    # dirnames = '_'.join([di.lower() for di in dir_name.split('/')[-1].split('_') if not di.isdigit()])
+
+                    # print(dir_name.replace('/', ''), filenames)
+                    # dirnames = dirnames.split('_hathitrust')[0]
+                    fuzziness = fuzz.ratio(filenames, dir_name.replace('/', ''))
                     if fuzziness > 70:
-                        final_dir = dir_name
-                        df = pd.DataFrame([{'local_dir': dir_name.split('/')[-1], 'file_name': filenames, 'fuzzy_ratio': fuzziness, 'metadata_file': subdir+ '/'+f, 'final_dir': final_dir}])
-                        dfs.append(df)
-                annotated_df.Dates = annotated_df.Dates.str.replace('Decmeber', 'December')
-                annotated_df.Dates = annotated_df.Dates.str.replace('Summer', 'July')
-                annotated_df = clean_annotated_df(annotated_df)
-                read_ids(md, final_dir, annotated_df)
-            get_files.finish()
-    dfs = pd.concat(dfs)
-    final_df = pd.merge(annotated_mapping_df, dfs, on='metadata_file')
-    final_df.to_csv('../datasets/mapping_files/directory_annotation_metadata_mapping.csv', index=False)
+                        print(file_name, dir_name, fuzziness)
+    #                     final_dir = dir_name
+    #                     df = pd.DataFrame([{
+    #                         'local_dir': dir_name.split('/')[-1],
+    #                         'file_name': filenames,
+    #                         'fuzzy_ratio': fuzziness,
+    #                         'metadata_file': os.path.join(subdir, f),
+    #                         'final_dir': final_dir
+    #                     }])
+    #                     dfs.append(df)
+                
+    #             # Clean and process annotated data
+    #             annotated_df.Dates = annotated_df.Dates.str.replace('Decmeber', 'December')
+    #             annotated_df.Dates = annotated_df.Dates.str.replace('Summer', 'July')
+    #             annotated_df = clean_annotated_df(annotated_df)
+    #             read_ids(md, final_dir, annotated_df)
+    
+    # # Combine and save the final DataFrame
+    # dfs = pd.concat(dfs)
+    # final_df = pd.merge(annotated_mapping_df, dfs, on='metadata_file')
+    # final_output_path = os.path.join('..', 'datasets', 'mapping_files', 'directory_annotation_metadata_mapping.csv')
+    # final_df.to_csv(final_output_path, index=False)
 
+if __name__ == "__main__":
+    # Define the relative path from the current working directory
+    relative_extracted_features_path = os.path.join("..", "..", "..", "periodical-collection-curation", "HathiTrust-pcc-datasets", "datasets", "ht_ef_datasets")
+    print(os.path.exists(relative_extracted_features_path))
 
-if __name__ ==  "__main__" :
-    process_metadatas()
+    # Compute the absolute path
+    absolute_extracted_features_path = os.path.abspath(relative_extracted_features_path)
+    
+    # Process the metadata files
+    process_metadatas(absolute_extracted_features_path)
 
     
