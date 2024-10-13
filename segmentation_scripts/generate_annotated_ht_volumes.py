@@ -122,6 +122,22 @@ def add_volumes_dates(title, file_name, magazine_title, date_vols):
 
 	df.to_csv(output_file, index=False)
 
+def combine_annotations_ht_volumes(extracted_features_output_dir: str, rerun_code: bool):
+	mapping_file_output_path = os.path.join('..', 'datasets', 'mapping_files', 'directory_annotation_metadata_mapping.csv')
+	mapping_df = pd.read_csv(mapping_file_output_path)
+	# Get relevant annotation file
+					# annotation_row = annotated_mapping_df.loc[annotated_mapping_df['metadata_file'] == f].copy()
+		#             # Clean and process annotated data
+	#             annotated_df.Dates = annotated_df.Dates.str.replace('Decmeber', 'December')
+	#             annotated_df.Dates = annotated_df.Dates.str.replace('Summer', 'July')
+	#             annotated_df = clean_annotated_df(annotated_df)
+	#             read_ids(md, final_dir, annotated_df)
+	# Read metadata and annotation files
+					# md = pd.read_csv(os.path.join(subdir, f), encoding="utf-8")
+					# annotation_output_path = os.path.join("..", "datasets", "annotated_datasets", annotation_row.annotation_file.values[0])
+					# annotated_df = pd.read_csv(annotation_output_path, encoding="utf-8")
+	pass
+
 
 def map_annotations_ht_directories(extracted_features_output_dir: str, rerun_code: bool) -> None:
 	"""
@@ -205,14 +221,3 @@ if __name__ == "__main__":
 	# Process the metadata files
 	rerun_code = False
 	map_annotations_ht_directories(absolute_extracted_features_path, rerun_code)
-# Get relevant annotation file
-					# annotation_row = annotated_mapping_df.loc[annotated_mapping_df['metadata_file'] == f].copy()
-		#             # Clean and process annotated data
-	#             annotated_df.Dates = annotated_df.Dates.str.replace('Decmeber', 'December')
-	#             annotated_df.Dates = annotated_df.Dates.str.replace('Summer', 'July')
-	#             annotated_df = clean_annotated_df(annotated_df)
-	#             read_ids(md, final_dir, annotated_df)
-	# Read metadata and annotation files
-					# md = pd.read_csv(os.path.join(subdir, f), encoding="utf-8")
-					# annotation_output_path = os.path.join("..", "datasets", "annotated_datasets", annotation_row.annotation_file.values[0])
-					# annotated_df = pd.read_csv(annotation_output_path, encoding="utf-8")
