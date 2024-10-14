@@ -2,26 +2,51 @@
 import os
 import pandas as pd
 from tqdm import tqdm
-from fuzzywuzzy import fuzz
+from thefuzz import fuzz, process
 from htrc_features import FeatureReader
 from datetime import datetime
 from rich.console import Console
 
+import sys
+sys.path.append('..')
+from segmentation_scripts.utils import read_csv_file
+
 console = Console()
 
-def transform_annotated_dates(rows):
-	"""Transform metadata dates into mergeable dates"""
-	date = rows[0:1].dates.values[0].replace('-', ' ').split(' ')
-	day = date[1] if (len(date) == 3) and ('-' not in rows[0:1].dates.values[0]) else '1'
-	start_month = date[0] 
-	end_month = date[1] if (len(date) > 2) and ('-' in rows[0:1].dates.values[0]) else start_month
-	year = date[-1]
+def transform_annotated_dates(rows: pd.DataFrame) -> pd.DataFrame:
+    """Transform metadata dates into mergeable dates.
+	
+	Args:
+		rows (pd.DataFrame): The rows to be transformed.
+		
+	Returns:
+		pd.DataFrame: The transformed rows."""
+    date = rows.iloc[0].dates.replace('-', ' ').split(' ')
+    day = date[1] if (len(date) == 3) and ('-' not in rows.iloc[0].dates) else '1'
+    start_month = date[0]
+    end_month = date[1] if (len(date) > 2) and ('-' in rows.iloc[0].dates) else start_month
+    year = date[-1]
 
-	start_date = day +' ' + start_month + ' ' + year
-	end_date = day +' ' + end_month + ' ' + year
-	rows['start_issue'] = datetime.strptime(start_date, '%d %B %Y')
-	rows['end_issue'] = datetime.strptime(end_date, '%d %B %Y')
-	return rows
+    start_date = f"{day} {start_month} {year}"
+    end_date = f"{day} {end_month} {year}"
+    rows['start_issue'] = datetime.strptime(start_date, '%d %B %Y')
+    rows['end_issue'] = datetime.strptime(end_date, '%d %B %Y')
+    return rows
+
+def clean_annotated_df(annotated_df: pd.DataFrame) -> pd.DataFrame:
+    """Clean and normalize dates in the annotated datasets that were created manually in Notion.
+	
+	Args:
+		annotated_df (pd.DataFrame): The annotated dataset to be cleaned and normalized.
+	
+	Returns:
+		pd.DataFrame: The cleaned and normalized annotated dataset."""
+    annotated_df.columns = [x.lower().replace(' ', '_') for x in annotated_df.columns]
+    annotated_df['notes'] = annotated_df['notes'].fillna('')
+    annotated_df = annotated_df.ffill()
+    print(annotated_df.columns)
+    annotated_df = annotated_df.groupby('dates', group_keys=False).apply(transform_annotated_dates, include_groups=True)
+    return annotated_df
 
 def cut_vols(rows):
 	# Remove duplicates from issues and also make sure that sequence doesn't include first page for some reason I can't remember now...
@@ -40,19 +65,17 @@ def cut_vols(rows):
 		final_rows = rows[~rows.sequence.between(int(pages.split('-')[0]), int(pages.split('-')[1]))]
 	return final_rows
 
-
-def clean_annotated_df(annotated_df):
-	"""Clean and normalize dates in the annotated datasets that were created manually in Notion"""
-	annotated_df.columns = [x.lower().replace(' ', '_') for x in annotated_df.columns]
-	annotated_df.notes = annotated_df['notes'].fillna('')
-	annotated_df = annotated_df.fillna(method='ffill')
-	
-	annotated_df = annotated_df.groupby('dates').apply(transform_annotated_dates)
-	return annotated_df
 	
 
-def merge_datasets(annotated_df, df):
+def merge_datasets(annotated_df, preidentified_periodicals_df):
 	"""Merge extracted features dataset with the annotated one"""
+	annotated_df.Dates = annotated_df.Dates.str.replace('Decmeber', 'December')
+	annotated_df.Dates = annotated_df.Dates.str.replace('Summer', 'July')
+	cleaned_annotated_df = clean_annotated_df(annotated_df)
+	preidentified_periodicals_df = preidentified_periodicals_df.rename(columns={'date': 'original_volumes'})
+	# Merge and subset to only the volumes that are in the annotated dataset
+	merged_annotated_df = pd.merge(cleaned_annotated_df, preidentified_periodicals_df, on='original_volumes', how='inner')
+	console.print(f"Initially we had {preidentified_periodicals_df.htid.nunique()} HathiTrust volumes, but after merging with the annotated dataset, we have {len(merged_annotated_df.htid.nunique())} volumes.", style="bold green")
 	final_anno = df.merge(annotated_df, on=['original_volumes', 'sequence'], how='outer')
 	final_anno = final_anno.sort_values(by=['original_volumes', 'sequence'])
 	final_anno.type_of_page.fillna('content', inplace=True)
@@ -115,31 +138,14 @@ def read_ids(md, folder, annotated_df):
 
 def add_volumes_dates(title, file_name, magazine_title, date_vols):
 	output_file = file_name.split('.csv')[0] + '_grouped.csv'
-	df = pd.read_csv(output_file)
+	df = read_csv_file(output_file)
 	df['date_vols'] = date_vols
 	df['magazine_title'] = magazine_title
 	df['title'] = title
 
 	df.to_csv(output_file, index=False)
 
-def combine_annotations_ht_volumes(extracted_features_output_dir: str, rerun_code: bool):
-	mapping_file_output_path = os.path.join('..', 'datasets', 'mapping_files', 'directory_annotation_metadata_mapping.csv')
-	mapping_df = pd.read_csv(mapping_file_output_path)
-	# Get relevant annotation file
-					# annotation_row = annotated_mapping_df.loc[annotated_mapping_df['metadata_file'] == f].copy()
-		#             # Clean and process annotated data
-	#             annotated_df.Dates = annotated_df.Dates.str.replace('Decmeber', 'December')
-	#             annotated_df.Dates = annotated_df.Dates.str.replace('Summer', 'July')
-	#             annotated_df = clean_annotated_df(annotated_df)
-	#             read_ids(md, final_dir, annotated_df)
-	# Read metadata and annotation files
-					# md = pd.read_csv(os.path.join(subdir, f), encoding="utf-8")
-					# annotation_output_path = os.path.join("..", "datasets", "annotated_datasets", annotation_row.annotation_file.values[0])
-					# annotated_df = pd.read_csv(annotation_output_path, encoding="utf-8")
-	pass
-
-
-def map_annotations_ht_directories(extracted_features_output_dir: str, rerun_code: bool) -> None:
+def older_map_annotations_ht_directories(extracted_features_output_dir: str, rerun_code: bool) -> None:
 	"""
 	This function maps the extracted features directories to the annotated metadata files. It saves the mapping to a CSV file. It uses fuzzy matching to find the best match between the extracted features directories and the metadata files. If there is no match, it prompts the user to select the correct directory from a list.
 
@@ -158,7 +164,7 @@ def map_annotations_ht_directories(extracted_features_output_dir: str, rerun_cod
 		subset_dir_list = [d for d in dir_list if d.count(os.sep) == 1]
 		# Read the annotated mapping file
 		annotated_mapping_output_path = os.path.join('..', 'datasets', 'mapping_files', 'annotation_metadata_mapping.csv')
-		annotated_mapping_df = pd.read_csv(annotated_mapping_output_path)
+		annotated_mapping_df = read_csv_file(annotated_mapping_output_path)
 		dfs = []
 
 		# Iterate over all metadata files
@@ -187,6 +193,66 @@ def map_annotations_ht_directories(extracted_features_output_dir: str, rerun_cod
 							}])
 							dfs.append(df)
 							break
+					if appended_data == False:
+						# turn subdir list into enumerated dictionary
+						processed_subset_dir_list = {i: d for i, d in enumerate(subset_dir_list)}
+						console.print("No match found for", filenames.replace('/', '').replace('_', ' '), "in the subset directories. Please select the correct directory from the list below:", style="bold red")
+						console.print(processed_subset_dir_list, style="bold blue")
+						selected_dir = int(input("Please select the correct directory: "))
+						final_dir = processed_subset_dir_list[selected_dir]
+						df = pd.DataFrame([{
+							'local_dir': final_dir.split('/')[-1],
+							'file_name': filenames,
+							'fuzzy_ratio': None,
+							'metadata_file': f,
+							'final_dir': final_dir
+						}])
+						dfs.append(df)
+
+		# Combine and save the final DataFrame
+		processed_df = pd.concat(dfs)
+		final_df = pd.merge(annotated_mapping_df, processed_df, on='metadata_file')
+		
+		final_df.to_csv(mapping_file_output_path, index=False)
+		console.print("Mapping file saved successfully.", style="bold green")
+
+def map_annotations_ht_directories(extracted_features_output_dir: str, rerun_code: bool) -> None:
+	"""
+	This function maps the extracted features directories to the annotated metadata files. It saves the mapping to a CSV file. It uses fuzzy matching to find the best match between the extracted features directories and the metadata files. If there is no match, it prompts the user to select the correct directory from a list.
+
+	Args:
+		extracted_features_output_dir (str): The directory containing the extracted features.
+		rerun_code (bool): A boolean indicating whether to rerun the code.
+
+	"""
+	mapping_file_output_path = os.path.join('..', 'datasets', 'mapping_files', 'directory_annotation_metadata_mapping.csv')
+	if os.path.exists(mapping_file_output_path) and rerun_code == False:
+		console.print("Mapping file already exists. Skipping...", style="bold green")
+		return
+	else:
+		preidentified_periodicals_df = read_csv_file(os.path.join("..", "..", "..", "periodical-collection-curation", "HathiTrust-pcc-datasets", "datasets", "preidentified_periodicals_with_full_metadata.csv"))
+		preidentified_periodical_titles = preidentified_periodicals_df['.lowercase_periodical_name'].unique().tolist()
+		dfs = []
+
+		# Iterate over all metadata files
+		annotated_dataset_output_path = os.path.join('..', 'datasets', 'annotated_datasets')
+		for _, _, files in tqdm(os.walk(annotated_dataset_output_path)):
+			for annotated_dataset_file_path in files:
+				if annotated_dataset_file_path.endswith('.csv'):
+					console.print(f'Processing {annotated_dataset_file_path}...', style="magenta")
+					# Create file name and join directories for files
+					file_name = annotated_dataset_file_path.rsplit('.', 1)[0].replace('_annotated_dataset', '')
+					filenames = '_'.join([fi for fi in file_name.split('_') if not fi.isdigit()])
+					appended_data = False
+					fuzzy_matches = process.extract(filenames, preidentified_periodical_titles, scorer=fuzz.token_sort_ratio, limit=5)
+					top_match = fuzzy_matches[0]
+					if top_match[1] == 100:
+						console.print(f"Found a match for {file_name} with {filenames.replace('/', '').replace('_', ' ')} and {top_match[0]} of {top_match[1]} fuzzy ratio.", style="bold green")
+						appended_data = True
+						subset_preidentified_periodicals_df = preidentified_periodicals_df[preidentified_periodicals_df['.lowercase_periodical_name'] == top_match[0]]
+						annotated_df = read_csv_file(os.path.join(annotated_dataset_output_path, annotated_dataset_file_path), encoding="utf-8")
+						
+						break
 					if appended_data == False:
 						# turn subdir list into enumerated dictionary
 						processed_subset_dir_list = {i: d for i, d in enumerate(subset_dir_list)}
