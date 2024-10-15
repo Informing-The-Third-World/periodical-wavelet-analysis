@@ -83,12 +83,27 @@ def cut_vols(rows: pd.DataFrame) -> pd.DataFrame:
 
 	return final_rows
 
+def clean_arab_observer_df(arabobserver_df):
+    arabobserver_df.loc[(arabobserver_df.start_issue == '1965-06-07') & (arabobserver_df.page_number == 328), 'notes'] = 'Not actually a cover'
 
-def clean_annotated_ht_volume(annotated_ht_df:pd.DataFrame) -> pd.DataFrame:
+    arabobserver_df.loc[(arabobserver_df.start_issue == '1965-06-07') & (arabobserver_df.page_number == 328), 'type_of_page'] = 'cover_page'
+    arabobserver_df.loc[(arabobserver_df.start_issue == '1965-06-07') & (arabobserver_df.page_number == 328), 'start_issue'] = '1965-06-14'
+    return arabobserver_df
+
+def clean_afro_asian_df(afroasian_df):
+    afroasian_df.loc[(afroasian_df.start_issue == '1967-06-01') & (afroasian_df.page_number == 2), 'notes'] = 'Not actually a cover'
+    afroasian_df.loc[(afroasian_df.start_issue == '1967-06-01') & (afroasian_df.page_number == 2), 'type_of_page'] = 'cover_page'
+    afroasian_df.loc[(afroasian_df.start_issue == '1967-09-01') & (afroasian_df.page_number == 4), 'notes'] = 'Not actually a cover'
+    afroasian_df.loc[(afroasian_df.start_issue == '1967-09-01') & (afroasian_df.page_number == 4), 'type_of_page'] = 'cover_page'
+    return afroasian_df
+
+
+def clean_annotated_ht_volume(annotated_ht_df:pd.DataFrame, volume_type: str) -> pd.DataFrame:
 	"""Process and clean an annotated HathiTrust volume.
 	
 	Args:
 		annotated_ht_df (pd.DataFrame): The annotated HathiTrust volume to be processed.
+		volume_type (str): The type of volume to be processed. Either grouped or individual.
 	
 	Returns:
 		annotated_ht_df (pd.DataFrame): The processed annotated HathiTrust volume.
@@ -102,13 +117,15 @@ def clean_annotated_ht_volume(annotated_ht_df:pd.DataFrame) -> pd.DataFrame:
 	annotated_ht_df['token'] = annotated_ht_df['token'].astype(str)
 	annotated_ht_df['notes'] = annotated_ht_df['notes'].astype(str)
 	annotated_ht_df['section'] = annotated_ht_df['section'].astype(str)
-	annotated_ht_df['pos'] = annotated_ht_df['pos'].astype(str)
+	if volume_type == "individual":
+		annotated_ht_df['pos'] = annotated_ht_df['pos'].astype(str)
 	annotated_ht_df['count'] = annotated_ht_df['count'].astype(float)   
 	with pd.option_context('future.no_silent_downcasting', True):
 		# Function to fill within each issue block
 		def fill_issue_block(group):
 			# Fill specific columns within the group
-			group[['token', 'notes', 'section', 'pos']] = group[['token', 'notes', 'section', 'pos']].fillna('')
+			col_names = ['token', 'notes', 'section', 'pos'] if volume_type == "individual" else ['token', 'notes', 'section']
+			group[col_names] = group[col_names].fillna('')
 			group['count'] = group['count'].fillna(0)
 			group['type_of_page'] = group['type_of_page'].fillna("content")
 			
@@ -128,7 +145,7 @@ def clean_annotated_ht_volume(annotated_ht_df:pd.DataFrame) -> pd.DataFrame:
 	# annotated_ht_df = annotated_ht_df.infer_objects()
 	return annotated_ht_df
 
-def merge_datasets(annotated_df: pd.DataFrame, preidentified_periodicals_df: pd.DataFrame, data_directory_path: str, cut_volumes: bool, rerun_code: bool, save_to_file: bool):
+def merge_datasets(annotated_df: pd.DataFrame, preidentified_periodicals_df: pd.DataFrame, data_directory_path: str, cut_volumes: bool, rerun_code: bool, save_to_file: bool, volume_type: str):
 	"""Merge extracted features dataset with the annotated datasets.
 
 	Args:
@@ -138,6 +155,7 @@ def merge_datasets(annotated_df: pd.DataFrame, preidentified_periodicals_df: pd.
 		cut_volumes (bool): A boolean indicating whether to cut volumes.
 		rerun_code (bool): A boolean indicating whether to rerun the code.
 		save_to_file (bool): A boolean indicating whether to save the merged dataset to a file.
+		volume_type (str): The type of volume to be processed. Either grouped or individual.
 	
 	Returns:
 		None
@@ -169,16 +187,16 @@ def merge_datasets(annotated_df: pd.DataFrame, preidentified_periodicals_df: pd.
 		annotated_ht_directory = os.path.join("..", "datasets", "annotated_ht_ef_datasets", new_publication_directory, volume_directory)
 		if not os.path.exists(annotated_ht_directory):
 			os.makedirs(annotated_ht_directory, exist_ok=True)
-		annotated_ht_file_path = os.path.join(annotated_ht_directory, f"{htid_value.replace('.', '_')}_annotated_individual_tokens.csv")		
+		annotated_ht_file_path = os.path.join(annotated_ht_directory, f"{htid_value.replace('.', '_')}_annotated_{volume_type}_tokens.csv")		
 		if os.path.exists(annotated_ht_file_path) and rerun_code == False:
 			console.print(f"Annotated HathiTrust file for {htid_value} already exists. Skipping...", style="bold green")
 		else:
-			ht_file_path = os.path.join(data_directory_path, "HathiTrust-pcc-datasets", publication_directory, volume_directory, f"{htid_value.replace('.', '_')}_individual_tokens.csv")
+			ht_file_path = os.path.join(data_directory_path, "HathiTrust-pcc-datasets", publication_directory, volume_directory, f"{htid_value.replace('.', '_')}_{volume_type}_tokens.csv")
 			if os.path.exists(ht_file_path):
 				ht_df = read_csv_file(ht_file_path)
 				ht_df = ht_df.rename(columns={'page': 'page_number', 'periodical_name': 'lowercase_periodical_name'})
 				annotated_ht_df = pd.merge(subset_merged_annotated_df, ht_df, on=['lowercase_periodical_name', 'htid', 'record_url', 'page_number'], how='outer')
-				processed_annotated_ht_df = clean_annotated_ht_volume(annotated_ht_df)
+				processed_annotated_ht_df = clean_annotated_ht_volume(annotated_ht_df, volume_type)
 				processed_annotated_ht_df = processed_annotated_ht_df.sort_values(by=['original_volumes', 'page_number'])
 				
 				tqdm.pandas(desc="Cutting volumes")
@@ -192,7 +210,7 @@ def merge_datasets(annotated_df: pd.DataFrame, preidentified_periodicals_df: pd.
 				console.print(f"File {ht_file_path} does not exist. Skipping...", style="bold red")
 				continue
 
-def map_annotated_ht_volumes( data_directory_path: str, rerun_code: bool, cut_volumes:bool, save_to_file:bool) -> None:
+def map_annotated_ht_volumes( data_directory_path: str, rerun_code: bool, cut_volumes:bool, save_to_file:bool, volume_type: str) -> None:
 	"""
 	This function maps the annotated HathiTrust volumes to the preidentified periodicals with full metadata. It merges the datasets and saves the merged dataset to a file.
 
@@ -201,6 +219,7 @@ def map_annotated_ht_volumes( data_directory_path: str, rerun_code: bool, cut_vo
 		rerun_code (bool): A boolean indicating whether to rerun the code.
 		cut_volumes (bool): A boolean indicating whether to cut volumes.
 		save_to_file (bool): A boolean indicating whether to save the merged dataset to a file.
+		volume_type (str): The type of volume to be processed. Either grouped or individual.
 	
 	Returns:
 		None
@@ -210,7 +229,7 @@ def map_annotated_ht_volumes( data_directory_path: str, rerun_code: bool, cut_vo
 	preidentified_periodical_titles = preidentified_periodicals_df['lowercase_periodical_name'].unique().tolist()
 
 	# Iterate over all metadata files
-	annotated_dataset_output_path = os.path.join('..', 'datasets', 'annotated_datasets')
+	annotated_dataset_output_path = os.path.join('..', 'datasets', 'manually_annotated_datasets')
 	for _, _, files in tqdm(os.walk(annotated_dataset_output_path)):
 		for annotated_dataset_file_path in files:
 			if annotated_dataset_file_path.endswith('.csv'):
@@ -242,11 +261,12 @@ def map_annotated_ht_volumes( data_directory_path: str, rerun_code: bool, cut_vo
 				if "Original Volumes" not in annotated_df.columns:
 					console.print(f"Original Volumes column not found in {annotated_dataset_file_path}. Skipping...", style="bold red")
 					continue
-				merge_datasets(annotated_df, subset_df, data_directory_path, cut_volumes, rerun_code, save_to_file)
+				merge_datasets(annotated_df, subset_df, data_directory_path, cut_volumes, rerun_code, save_to_file, volume_type)
 
 if __name__ == "__main__":
 	data_directory_path = get_data_directory_path()
 	should_rerun_code = False
 	should_cut_volumes = True
 	should_save_to_file = True
-	map_annotated_ht_volumes(data_directory_path, should_rerun_code, should_cut_volumes, should_save_to_file)
+	volume_type = "grouped"
+	map_annotated_ht_volumes(data_directory_path, should_rerun_code, should_cut_volumes, should_save_to_file, volume_type)
