@@ -125,7 +125,7 @@ def clean_annotated_ht_volume(annotated_ht_df:pd.DataFrame) -> pd.DataFrame:
 	annotated_ht_df = annotated_ht_df.drop(columns=['temp_date', 'issue_id'])
 
 	# Infer data types after filling
-	annotated_ht_df = annotated_ht_df.infer_objects()
+	# annotated_ht_df = annotated_ht_df.infer_objects()
 	return annotated_ht_df
 
 def merge_datasets(annotated_df: pd.DataFrame, preidentified_periodicals_df: pd.DataFrame, data_directory_path: str, cut_volumes: bool, rerun_code: bool, save_to_file: bool):
@@ -181,7 +181,8 @@ def merge_datasets(annotated_df: pd.DataFrame, preidentified_periodicals_df: pd.
 				processed_annotated_ht_df = clean_annotated_ht_volume(annotated_ht_df)
 				processed_annotated_ht_df = processed_annotated_ht_df.sort_values(by=['original_volumes', 'page_number'])
 				
-				cut_annotated_ht_df = processed_annotated_ht_df.groupby('dates', group_keys=False).apply(cut_vols, include_groups=True) if cut_volumes else processed_annotated_ht_df
+				tqdm.pandas(desc="Cutting volumes")
+				cut_annotated_ht_df = processed_annotated_ht_df.groupby('dates', group_keys=False).progress_apply(cut_vols, include_groups=True) if cut_volumes else processed_annotated_ht_df
 
 				cut_annotated_ht_df = cut_annotated_ht_df.reset_index(drop=True)
 				cut_annotated_ht_df = cut_annotated_ht_df.loc[:, ~cut_annotated_ht_df.columns.str.contains('^level')]
