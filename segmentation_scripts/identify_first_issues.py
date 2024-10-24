@@ -88,7 +88,7 @@ def clean_digits(df: pd.DataFrame) -> pd.DataFrame:
 	pd.DataFrame
 		The cleaned DataFrame.
 	"""
-	max_page = df.page_number.max()
+	max_possible_page = df.page_number.max()
 	
 	df['token'] = df['token'].astype(str)
 	if 'volume_name' in df.columns:
@@ -106,24 +106,23 @@ def clean_digits(df: pd.DataFrame) -> pd.DataFrame:
 	
 	
 	
-	console.print(f"Number of digits in this volume: {len(subset_digits)}")
-	console.print(f"Number of non-digit pages in this volume: {len(non_digits_pages)}")
+	console.print(f"Number of digits in this volume: {len(subset_digits)}", style="bright_green")
+	console.print(f"Number of non-digit pages in this volume: {len(non_digits_pages)}", style="bright_magenta")
 	
 	subset_digits['number'] = subset_digits['token'].astype(int, errors='ignore')
-	max_possible_number = max_page + 25
-	filtered_subset_digits = subset_digits[subset_digits['number'] < max_possible_number]
-	non_filtered_subset_digits = subset_digits[(subset_digits['number'] >= max_possible_number) & (~subset_digits.page_number.isin(filtered_subset_digits.page_number))].groupby('page_number').first().reset_index()
-	console.print(f"Number of digits in this volume after filtering for max page length: {len(filtered_subset_digits)}")
-	console.print(f"Number of pages without digits in this volume after filtering for max page length: {len(non_filtered_subset_digits)}")
+	filtered_subset_digits = subset_digits[(subset_digits['number'] <= max_possible_page) & (subset_digits['number'] <= subset_digits.page_number)].copy()
+	non_filtered_subset_digits = subset_digits[(subset_digits['number'] >= max_possible_page) & (~subset_digits.page_number.isin(filtered_subset_digits.page_number))].groupby('page_number').first().reset_index()
+	console.print(f"Number of digits in this volume after filtering for max page length: {len(filtered_subset_digits)}", style="bright_green")
+	console.print(f"Number of pages without digits in this volume after filtering for max page length: {len(non_filtered_subset_digits)}", style="bright_magenta")
 	
 	# Calculate implied zero only for digit pages
 	filtered_subset_digits['implied_zero'] = filtered_subset_digits['page_number'].astype(int) - filtered_subset_digits['number']
 	
 	final_subset_digits = filtered_subset_digits[filtered_subset_digits['implied_zero'] >= 0]
-	console.print(f"Number of digits in this volume after filtering for max page length and implied zero: {len(final_subset_digits)}")
+	console.print(f"Number of digits in this volume after filtering for max page length and implied zero: {len(final_subset_digits)}", style="bright_green")
 	remaining_missing_pages = df[(~df.page_number.isin(final_subset_digits.page_number)) & (~df.page_number.isin(non_digits_pages.page_number))].copy()
 	remaining_missing_pages = remaining_missing_pages.groupby('page_number').first().reset_index()
-	console.print(f"Number of pages without digits in this volume after filtering for max page length and digit pages: {len(remaining_missing_pages)}")
+	console.print(f"Number of pages without digits in this volume after filtering for max page length and digit pages: {len(remaining_missing_pages)}", style="bright_magenta")
 	
 	# Merge non-digit pages back into the DataFrame
 	non_digits_pages['page_type'] = 'non_digit'
@@ -132,14 +131,14 @@ def clean_digits(df: pd.DataFrame) -> pd.DataFrame:
 	non_filtered_subset_digits['page_type'] = 'digit_too_large'
 	full_df_with_digits = pd.concat([final_subset_digits, non_digits_pages, remaining_missing_pages, non_filtered_subset_digits]).sort_values(by=['page_number']).reset_index(drop=True)
 	
-	console.print(f"Number of pages after including non-digit pages: {full_df_with_digits.page_number.nunique()}")
+	console.print(f"Number of pages after including non-digit pages: {full_df_with_digits.page_number.nunique()}", style="bright_yellow")
 
 	if full_df_with_digits.page_number.nunique() != df.page_number.nunique():
 		added_pages = df[~df.page_number.isin(full_df_with_digits.page_number)].copy()
 		added_pages = added_pages.groupby('page_number').first().reset_index()
 		added_pages['page_type'] = 'added'
 		full_df_with_digits = pd.concat([full_df_with_digits, added_pages]).sort_values(by=['page_number']).reset_index(drop=True)
-		console.print(f"Number of pages after including added pages: {full_df_with_digits.page_number.nunique()}")
+		console.print(f"Number of pages after including added pages: {full_df_with_digits.page_number.nunique()}", style="bright_yellow")
 
 	# Calculate the number of digits per page
 	tqdm.pandas(desc="Calculating digits per page")
@@ -183,7 +182,7 @@ def run_global_sequence_alignment(window: list, target_sequence: list, placehold
 
 	# Create Needleman-Wunsch global alignment instance
 	alignment = needle.NeedlemanWunsch(observed_sequence, target_sequence)
-	alignment.change_matrix(core.ScoreMatrix(match=4, miss=-0.5, gap=-1))
+	alignment.change_matrix(core.ScoreMatrix(match=6, miss=-0.5, gap=-1))
 
 	try:
 		# Run the alignment
@@ -295,16 +294,17 @@ def sequence_alignment_issue_detection_global(df: pd.DataFrame, threshold_sizes:
 	df = df.sort_values(by=['page_number', 'implied_zero'])
 
 	all_boundaries = []
-
-	for threshold_size in tqdm(range(threshold_sizes[0], threshold_sizes[1]), desc="Threshold Sizes"):
-		target_sequence = list(range(1, threshold_size + 1))  # Generate the target sequence
-		first_page_number = df.page_number.min()
-		final_page_number = df[df.page_number == first_page_number + threshold_size].page_number.max()
-		
+	first_page_number = df.page_number.min()
+	for threshold_size in tqdm(range(threshold_sizes[0], threshold_sizes[1]), desc="Running Sequence Alignment"):
 		for additional_page in range(5):
 			current_first_page_number = first_page_number + additional_page
+			final_page_number = df[df.page_number == current_first_page_number + threshold_size]
+			if final_page_number.empty:
+				continue
+			final_page_number = final_page_number.page_number.max()
 			selected_rows = df[(df.page_number <= final_page_number) & (df.page_number >= current_first_page_number)]
 			potential_sequence = list(zip(selected_rows['page_number'], selected_rows['implied_zero']))
+			target_sequence = list(range(current_first_page_number, final_page_number))  # Generate the target sequence
 			
 			# Run sequence alignment with placeholders
 			alignment_score, aligned_observed, aligned_target = run_global_sequence_alignment(potential_sequence, target_sequence, placeholder=placeholder)
@@ -314,26 +314,28 @@ def sequence_alignment_issue_detection_global(df: pd.DataFrame, threshold_sizes:
 				all_boundaries.append((alignment_score, aligned_observed, aligned_target, threshold_size, current_first_page_number, final_page_number))
 
 	boundaries_df = pd.DataFrame(all_boundaries, columns=['alignment_score', 'aligned_observed', 'aligned_target', 'threshold_size', 'start_page', 'end_page'])
-
+	if boundaries_df.empty:
+		console.print("No boundaries found.", style="bright_red")
+		return boundaries_df, pd.DataFrame(), 0, 0
 	seventy_five_threshold = boundaries_df['alignment_score'].quantile(0.75)
-	top_ten_boundaries = boundaries_df[boundaries_df.alignment_score > seventy_five_threshold].sort_values(by=['alignment_score', 'start_page'], ascending=[False, True]).head(10)
-	generate_table(top_ten_boundaries[['alignment_score', 'threshold_size', 'start_page', 'end_page']], "Top Ten Likely First Issue Boundaries")
+	top_boundaries = boundaries_df[boundaries_df.alignment_score > seventy_five_threshold].sort_values(by=['alignment_score', 'start_page'], ascending=[False, True])
+	generate_table(top_boundaries[['alignment_score', 'threshold_size', 'start_page', 'end_page']], "Top Ten Likely First Issue Boundaries")
 
 	# Calculate the mean of threshold sizes
-	mean_threshold = top_ten_boundaries['threshold_size'].mean()
+	mean_threshold = top_boundaries['threshold_size'].mean()
 
 	# Apply the selection function to the top ten boundaries
-	best_first_issue = select_likely_first_issue(top_ten_boundaries, mean_threshold)
+	best_first_issue = select_likely_first_issue(top_boundaries, mean_threshold)
 	best_first_issue_df = pd.DataFrame([best_first_issue]).reset_index(drop=True)
 	generate_table(best_first_issue_df[['alignment_score', 'threshold_size', 'start_page', 'end_page']], "Best First Issue Candidate")
 
 	# Calculate confidence intervals for threshold_size and alignment_score
-	mean_threshold, lower_threshold, upper_threshold, margin_error_threshold = calculate_confidence_interval(top_ten_boundaries, 'threshold_size')
-	mean_score, lower_score, upper_score, margin_error_score = calculate_confidence_interval(top_ten_boundaries, 'alignment_score')
+	mean_threshold, lower_threshold, upper_threshold, margin_error_threshold = calculate_confidence_interval(top_boundaries, 'threshold_size')
+	mean_score, lower_score, upper_score, margin_error_score = calculate_confidence_interval(top_boundaries, 'alignment_score')
 
-	console.print(f"Threshold Size: Mean = {mean_threshold}, CI = ({lower_threshold}, {upper_threshold}), Margin of Error = {margin_error_threshold}", style="bold")
-	console.print(f"Alignment Score: Mean = {mean_score}, CI = ({lower_score}, {upper_score}), Margin of Error = {margin_error_score}", style="bold")
-	return boundaries_df, top_ten_boundaries, lower_threshold, upper_threshold 
+	console.print(f"Threshold Size: Mean = {mean_threshold}, CI = ({lower_threshold}, {upper_threshold}), Margin of Error = {margin_error_threshold}", style="bright_cyan")
+	console.print(f"Alignment Score: Mean = {mean_score}, CI = ({lower_score}, {upper_score}), Margin of Error = {margin_error_score}", style="bright_cyan")
+	return boundaries_df, top_boundaries, lower_threshold, upper_threshold 
 
 def probabilistic_first_issue_detection(df: pd.DataFrame, threshold_sizes: list, window_size: int = 5, score_threshold: float = 0.5) -> pd.DataFrame:
 	"""Identify the likely first issue length using probabilistic detection.
@@ -362,14 +364,16 @@ def probabilistic_first_issue_detection(df: pd.DataFrame, threshold_sizes: list,
 	df = df.sort_values(by=['page_number'])
 
 	all_boundaries = []
-
-	for threshold_size in tqdm(range(threshold_sizes[0], threshold_sizes[1]), desc="Threshold Sizes"):
-		first_page_number = df.page_number.min()
-		final_page_number = df[df.page_number == first_page_number + threshold_size].page_number.max()
+	first_page_number = df.page_number.min()
+	for threshold_size in tqdm(range(threshold_sizes[0], threshold_sizes[1]), desc="Running Probabilistic Detection"):
 
 		# Vary the start page within a defined range (similar to Needleman-Wunsch approach)
 		for additional_page in range(5):
 			current_first_page_number = first_page_number + additional_page
+			final_page_number = df[df.page_number == current_first_page_number + threshold_size]
+			if final_page_number.empty:
+				continue
+			final_page_number = final_page_number.page_number.max()
 			selected_rows = df[(df.page_number <= final_page_number) & (df.page_number >= current_first_page_number)]
 
 			sliding_window = deque(maxlen=window_size)
@@ -516,14 +520,15 @@ def detect_first_issue_prefix_sum(df, threshold_range=[10, 50], updown=0.5, diag
 		The best candidate for the first issue and the DataFrame containing all candidates.
 	"""
 	max_score_data = []
-
-	for threshold_size in tqdm(range(threshold_range[0], threshold_range[1]), desc="Threshold Sizes"):
-		first_page_number = df.page_number.min()
-		final_page_number = df[df.page_number == first_page_number + threshold_size].page_number.max()
-
+	first_page_number = df.page_number.min()
+	for threshold_size in tqdm(range(threshold_range[0], threshold_range[1]), desc="Running Prefix Sums"):
 		# Vary the start page within a defined range (similar to Needleman-Wunsch approach)
 		for additional_page in range(5):
 			current_first_page_number = first_page_number + additional_page
+			final_page_number = df[df.page_number == first_page_number + threshold_size]
+			if final_page_number.empty:
+				continue
+			final_page_number = final_page_number.page_number.max()
 			selected_rows = df[(df.page_number <= final_page_number) & (df.page_number >= current_first_page_number)]
 			# Initialize raw scores matrix
 			raw_scores = initialize_raw_scores(selected_rows, max_threshold=threshold_range[1])
@@ -612,7 +617,7 @@ def generate_issue_binary(start_page, end_page, total_pages) -> np.ndarray:
 	np.ndarray
 		The binary representation of the issue boundaries.
 	"""
-	issue_binary = np.zeros(total_pages, dtype=int)
+	issue_binary = np.zeros(int(total_pages), dtype=int)
 	issue_binary[int(start_page):int(end_page) + 1] = 1
 	return issue_binary
 
@@ -685,11 +690,11 @@ def load_and_expand_data(file_path: str) -> tuple:
 	full_df = full_df.sort_values(by=['page_number'])
 	full_df = full_df.rename(columns={'issue_number': 'original_issue_number'})
 	full_df['temp_issue_number'] = pd.factorize(full_df['original_issue_number'])[0]
-	console.print(f"Volume has this many tokens: {len(full_df)}")
-	console.print(f"Volume has this many issues: {full_df.start_issue.nunique()}")
-	console.print(f"Volume has this many pages: {full_df.page_number.nunique()}")
+	console.print(f"Volume has this many tokens: {len(full_df)}", style="bright_blue")
+	console.print(f"Volume has this many issues: {full_df.start_issue.nunique()}", style="bright_blue")
+	console.print(f"Volume has this many pages: {full_df.page_number.nunique()}", style="bright_blue")
 	expanded_df = full_df.loc[full_df.index.repeat(full_df['count'])].reset_index(drop=True)
-	console.print(f"Expanded volume has this many tokens: {len(expanded_df)}")
+	console.print(f"Expanded volume has this many tokens: {len(expanded_df)}", style="bright_blue")
 	tokens_per_page = expanded_df.groupby('page_number').size().reset_index(name='tokens_per_page')
 	expanded_df = expanded_df.merge(tokens_per_page, on='page_number', how='left')
 
@@ -700,101 +705,132 @@ def load_and_expand_data(file_path: str) -> tuple:
 
 	return full_df, expanded_df
 
-def process_annotated_volumes() -> None:
+def process_annotated_volumes(rerun_code: bool) -> None:
 	"""Process the annotated volumes to identify the first issue.
 	
 	Parameters
 	----------
-	None
+	rerun_code : bool
+		Flag to indicate whether to rerun the code.
 	
 	Returns
 	-------
 	None
 	"""
-	for directory, _, files in tqdm(os.walk("../datasets/annotated_ht_ef_datasets/"), desc="Processing Volumes"):
+	# Count the number of matching files
+	matching_files = []
+	for directory, _, files in tqdm(os.walk("../datasets/annotated_ht_ef_datasets/"), desc="Counting matching files"):
 		for file in files:
-			if (file.endswith(".csv")) and ('individual' in file):
+			if file.endswith(".csv") and 'individual' in file:
 				if os.path.exists(os.path.join(directory, file)):
-					
-					file_path = os.path.join(directory, file)
-					console.print(f"Processing file: {file_path}")
-					full_df, expanded_df = load_and_expand_data(file_path)
-					annotated_df = full_df[['page_number', 'start_issue', 'end_issue', 'type_of_page']].drop_duplicates()
+					matching_files.append({"file": file, "directory": directory, "file_path": os.path.join(directory, file)})
+	matching_files_df = pd.DataFrame(matching_files)
+	console.print(f"Found {len(matching_files_df)} matching files.", style="bright_green")
 
-					# Group by 'start_issue' and aggregate
-					grouped_df = annotated_df.groupby('start_issue').agg(
-						first_page=('page_number', 'min'),
-						last_page=('page_number', 'max'),
-						number_of_pages=('page_number', 'count')
-					).reset_index()
-					grouped_df = grouped_df.sort_values(by='first_page')
-					annotated_first_issue = grouped_df[0:1]
-					if annotated_first_issue.number_of_pages.values[0] < 20:
-						console.print("First issue has less than 20 pages. Skipping volume.")
-						continue
-	
-					subset_digits = clean_digits(expanded_df)
-					counts_per_annotated_issue = subset_digits.start_issue.value_counts().reset_index()
-					generate_table(counts_per_annotated_issue, "Counts per Annotated Issue")
+	for index, row in matching_files_df.iterrows():
+		file = row['file']
+		directory = row['directory']
+		file_path = row['file_path']
+		console.print(f"Processing file: {file_path}. Number {index} out of {len(matching_files_df)}", style="bright_white")
 
-					dedup_subset_digits = subset_digits.drop_duplicates()
-					sequence_alignment_likely_first_issue_boundaries_df, top_ten_sequence_alignment_boundaries_df, lower_threshold, upper_threshold = sequence_alignment_issue_detection_global(dedup_subset_digits, threshold_sizes=[10, 200], placeholder=-1)
+		first_issue_directory = directory.replace("annotated_ht_ef_datasets", "first_issue_metrics")
+		if os.path.exists(first_issue_directory) == False:
+			os.makedirs(first_issue_directory, exist_ok=True)
+		metrics_file_output_path = os.path.join(first_issue_directory, file.replace(".csv", "_first_issue_metrics.csv"))
+		if os.path.exists(metrics_file_output_path) and not rerun_code:
+			console.print(f"Metrics file already exists for {file_path}. Skipping.", style="bright_red")
+			continue
+		# Load and expand data
+		full_df, expanded_df = load_and_expand_data(file_path)
+		annotated_df = full_df[['page_number', 'start_issue', 'end_issue', 'type_of_page']].drop_duplicates()
+		# Group by 'start_issue' and aggregate
+		grouped_df = annotated_df.groupby('start_issue').agg(
+			first_page=('page_number', 'min'),
+			last_page=('page_number', 'max'),
+			number_of_pages=('page_number', 'count')
+		).reset_index()
+		grouped_df = grouped_df.sort_values(by='first_page')
+		if len(grouped_df) <= 1:
+			console.print("Only one issue found. Skipping volume.", style="bright_red")
+			continue
+		annotated_first_issue = grouped_df[0:1]
+		if annotated_first_issue.number_of_pages.values[0] <= 10:
+			console.print("First issue has less than 10 pages. Skipping volume.", style="bright_red")
+			continue
 
-					sliding_window_prob_first_issue_df, top_sliding_window_prob_candidates_df = probabilistic_first_issue_detection(subset_digits, threshold_sizes=[round(lower_threshold), round(upper_threshold)], window_size=5, score_threshold=0.5)
+		subset_digits = clean_digits(expanded_df)
+		counts_per_annotated_issue = subset_digits.start_issue.value_counts().reset_index()
+		generate_table(counts_per_annotated_issue, "Counts per Annotated Issue")
 
-					best_first_issue, prefix_all_candidates_df, top_prefix_prob_candidates_df = detect_first_issue_prefix_sum(subset_digits, threshold_range=[round(lower_threshold), round(upper_threshold)])
+		dedup_subset_digits = subset_digits.drop_duplicates()
+		sequence_alignment_full_data = False
+		sequence_alignment_likely_first_issue_boundaries_df, top_sequence_alignment_boundaries_df, lower_threshold, upper_threshold = sequence_alignment_issue_detection_global(dedup_subset_digits, threshold_sizes=[10, 200], placeholder=-1)
+		console.print(f"Top sequence alignment boundaries: {len(top_sequence_alignment_boundaries_df)}", style="bright_white")
+		if (len(top_sequence_alignment_boundaries_df) > 150) or (len(top_sequence_alignment_boundaries_df) == 0):
+			console.print("Too many candidates found. Running with full data.", style="bright_red")
+			sequence_alignment_full_data = True
+			sequence_alignment_likely_first_issue_boundaries_df, top_sequence_alignment_boundaries_df, lower_threshold, upper_threshold = sequence_alignment_issue_detection_global(subset_digits, threshold_sizes=[10, 200], placeholder=-1)
 
-					top_issues = prefix_all_candidates_df[['total_score', 'threshold_size', 'start_page', 'end_page']].merge(sequence_alignment_likely_first_issue_boundaries_df[['alignment_score', 
-					'threshold_size', 'start_page', 'end_page']], on=['threshold_size', 'start_page', 'end_page'], how='inner').sort_values(by=['total_score', 'alignment_score'], ascending=[False, False])
+		sliding_window_prob_first_issue_df, top_sliding_window_prob_candidates_df = probabilistic_first_issue_detection(subset_digits, threshold_sizes=[round(lower_threshold), round(upper_threshold)], window_size=5, score_threshold=0.5)
 
-					if top_issues.empty:
-						top_issues = prefix_all_candidates_df[['total_score', 'threshold_size', 'start_page', 'end_page']].merge(sequence_alignment_likely_first_issue_boundaries_df[['alignment_score', 'threshold_size', 'start_page', 'end_page']], on=['threshold_size', 'start_page', 'end_page'], how='outer').sort_values(by=['total_score', 'alignment_score'], ascending=[False, False])
+		best_first_issue, prefix_all_candidates_df, top_prefix_prob_candidates_df = detect_first_issue_prefix_sum(subset_digits, threshold_range=[round(lower_threshold), round(upper_threshold)])
 
-					top_issues_df = top_issues.merge(sliding_window_prob_first_issue_df[['cumulative_score','threshold_size', 'start_page', 'end_page']], on=['threshold_size', 'start_page', 'end_page'], how='inner').sort_values(by=['total_score', 'cumulative_score'], ascending=[False, False])
+		top_issues = prefix_all_candidates_df[['total_score', 'threshold_size', 'start_page', 'end_page']].merge(sequence_alignment_likely_first_issue_boundaries_df[['alignment_score', 
+		'threshold_size', 'start_page', 'end_page']], on=['threshold_size', 'start_page', 'end_page'], how='inner').sort_values(by=['total_score', 'alignment_score'], ascending=[False, False])
 
-					if top_issues_df.empty:
-						top_issues_df = top_issues.merge(sliding_window_prob_first_issue_df[['cumulative_score','threshold_size', 'start_page', 'end_page']], on=['threshold_size', 'start_page', 'end_page'], how='outer').sort_values(by=['total_score', 'cumulative_score'], ascending=[False, False])
+		if top_issues.empty:
+			top_issues = prefix_all_candidates_df[['total_score', 'threshold_size', 'start_page', 'end_page']].merge(sequence_alignment_likely_first_issue_boundaries_df[['alignment_score', 'threshold_size', 'start_page', 'end_page']], on=['threshold_size', 'start_page', 'end_page'], how='outer').sort_values(by=['total_score', 'alignment_score'], ascending=[False, False])
 
-					if top_issues_df.empty:
-						console.print("No common candidates found between the three methods.")
-						continue
+		top_issues_df = top_issues.merge(sliding_window_prob_first_issue_df[['cumulative_score','threshold_size', 'start_page', 'end_page']], on=['threshold_size', 'start_page', 'end_page'], how='inner').sort_values(by=['total_score', 'cumulative_score'], ascending=[False, False])
 
-					top_issues_df = top_issues_df.drop_duplicates()
-					generate_table(top_issues_df[['threshold_size', 'start_page', 'end_page', 'alignment_score', 'total_score', 'cumulative_score']], "Top First Issue Candidates")
+		if top_issues_df.empty:
+			top_issues_df = top_issues.merge(sliding_window_prob_first_issue_df[['cumulative_score','threshold_size', 'start_page', 'end_page']], on=['threshold_size', 'start_page', 'end_page'], how='outer').sort_values(by=['total_score', 'cumulative_score'], ascending=[False, False])
 
-					weights = {
-						'total_score': 0.4,
-						'alignment_score': 0.4,
-						'cumulative_score': 0.2
-					}
+		if top_issues_df.empty:
+			console.print("No common candidates found between the three methods.", style="bright_red")
+			continue
 
-					top_issues_df['composite_score'] = (
-						weights['total_score'] * top_issues_df['total_score'] +
-						weights['alignment_score'] * top_issues_df['alignment_score'] +
-						weights['cumulative_score'] * top_issues_df['cumulative_score']
-					)
+		top_issues_df = top_issues_df.drop_duplicates()
+		generate_table(top_issues_df[['threshold_size', 'start_page', 'end_page', 'alignment_score', 'total_score', 'cumulative_score']], "Top First Issue Candidates")
 
-					top_issues_df = top_issues_df.sort_values(by='composite_score', ascending=False)
-					generate_table(top_issues_df[['threshold_size', 'start_page', 'end_page', 'alignment_score', 'total_score', 'cumulative_score', 'composite_score']], "Top First Issue Candidates with Composite Score")
+		weights = {
+			'total_score': 0.4,
+			'alignment_score': 0.4,
+			'cumulative_score': 0.2
+		}
 
-					# Apply the function to your DataFrame
-					top_issues_df = calculate_combined_score(top_issues_df)
+		top_issues_df['composite_score'] = (
+			weights['total_score'] * top_issues_df['total_score'] +
+			weights['alignment_score'] * top_issues_df['alignment_score'] +
+			weights['cumulative_score'] * top_issues_df['cumulative_score']
+		)
 
-					# Define the total number of pages in the volume
-					total_pages = full_df['page_number'].max() + 1
+		top_issues_df = top_issues_df.sort_values(by='composite_score', ascending=False)
+		generate_table(top_issues_df[['threshold_size', 'start_page', 'end_page', 'alignment_score', 'total_score', 'cumulative_score', 'composite_score']], "Top First Issue Candidates with Composite Score")
 
-					# Calculate accuracy, precision, recall, and F1-score for the first issue detection
-					metrics_df = calculate_first_issue_accuracy(top_issues_df, grouped_df, total_pages)
+		# Apply the function to your DataFrame
+		top_issues_df = calculate_combined_score(top_issues_df)
 
-					metrics_df = metrics_df.sort_values(by='f1', ascending=False)
-					generate_table(metrics_df[['threshold_size', 'start_page', 'end_page', 'accuracy', 'precision', 'recall', 'f1']], "First Issue Detection Metrics")
-					metrics_df['annotated_file_path'] = os.path.join(directory, file)
-					first_issue_directory = directory.replace("annotated_ht_ef_datasets", "first_issue_metrics")
-					if os.path.exists(first_issue_directory) == False:
-						os.makedirs(first_issue_directory, exist_ok=True)
-					metrics_file_output_path = os.path.join(first_issue_directory, file.replace(".csv", "_first_issue_metrics.csv"))
-					metrics_df.to_csv(metrics_file_output_path, index=False)
+		# Define the total number of pages in the volume
+		total_pages = full_df['page_number'].max() + 1
+
+		# Calculate accuracy, precision, recall, and F1-score for the first issue detection
+		metrics_df = calculate_first_issue_accuracy(top_issues_df, grouped_df, total_pages)
+
+		metrics_df = metrics_df.sort_values(by='f1', ascending=False)
+		generate_table(metrics_df[['threshold_size', 'start_page', 'end_page', 'accuracy', 'precision', 'recall', 'f1']], "First Issue Detection Metrics")
+		metrics_df['annotated_file_path'] = os.path.join(directory, file)
+		metrics_df['sequence_alignment_full_data'] = sequence_alignment_full_data
+		metrics_df['final_number_of_candidates'] = len(top_issues_df)
+		metrics_df['upper_threshold'] = upper_threshold
+		metrics_df['lower_threshold'] = lower_threshold
+		metrics_df['sequence_alignment_candidates'] = len(top_sequence_alignment_boundaries_df)
+		metrics_df['probabilistic_candidates'] = len(top_sliding_window_prob_candidates_df)
+		metrics_df['prefix_sum_candidates'] = len(top_prefix_prob_candidates_df)
+		
+		metrics_df.to_csv(metrics_file_output_path, index=False)
 
 
 if __name__ == "__main__":
-	process_annotated_volumes()
+	reprocess_data = True
+	process_annotated_volumes(reprocess_data)
