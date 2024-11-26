@@ -94,14 +94,15 @@ def clean_digits(df: pd.DataFrame) -> pd.DataFrame:
 	if 'volume_name' in df.columns:
 		df['volume_number'] = df['volume_number'].fillna(0)
 	
-	# Identify pages with digit tokens
+	# Identify pages with digit tokens first using the 'isdigit' method
 	subset_digits = df[df['token'].str.isdigit()].copy()
+	# Also check using the filter_integers function which does regex matching
 	possible_pages = subset_digits[subset_digits['token'].apply(filter_integers)].copy()
-	# Use the smaller subset if possible_pages is smaller
+	# Use the smaller subset if possible_pages is smaller so that we are ensuring we are getting best quality digits
 	if len(possible_pages) < len(subset_digits):
 		subset_digits = possible_pages
 	non_digits_pages = df[(~df['token'].str.isdigit()) & (~df.page_number.isin(subset_digits.page_number))].copy()
-	# just take the first page of non_digits_pages
+	# just take the first page of non_digits_pages since we only need to keep one page per page_number
 	non_digits_pages = non_digits_pages.groupby('page_number').first().reset_index()
 	
 	
