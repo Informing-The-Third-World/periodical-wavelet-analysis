@@ -15,6 +15,8 @@ Headers from the metadata file:
 issue_number,dates,page_number,type_of_page,original_volumes,notes,start_issue,end_issue,link,htid,original_source,record_url,periodical_name,publication_type,id,metadata_schema_version,enumeration_chronology,type_of_resource,title,date_created,pub_date,language,access_profile,isbn,issn,lccn,oclc,page_count,feature_schema_version,access_rights,alternate_title,category,genre_ld,genre,contributor_ld,contributor,handle_url,source_institution_ld,source_institution,lcc,type,is_part_of,last_rights_update_date,pub_place_ld,pub_place,main_entity_of_page,publisher_ld,publisher,lowercase_periodical_name,publication_directory,volume_directory
 ```
 
+Edit: Actually we can just use the order the volumes are displayed on the Hathi Trust website to determine the order of the issues. This is likely to be more accurate than the publication date, which may be incorrect in the metadata.
+
 ## Step 2: Tokens Per Page
 
 This gives us a sense of the likely candidates for start/stop markers in the data. Also give info on how many images are in the volume, versus a more prose-based dataset. Use the tokens/character per page to determine the probability of a page being a cover, or a table of contents, or an advertisement - all info towards identifying the start/stop of an issue. This may not work for all languages (e.g. character number may not be a good indicator for Chinese). Effectively trying to use the length or amount of data in the dataset to determine the likelihood of a page being a certain type of page.
