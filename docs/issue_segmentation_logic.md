@@ -25,6 +25,9 @@ Identify the following:
 - `tokens_per_page`
 - `total_token_number`
 
+Edit: we are now doing frequency analysis both to cluster periodicals and determine the likely threshold for tokens per page. We can use the frequency analysis to determine the likely start/stop of an issue.
+
+
 ## Step 3: Page Number Extraction
 
 After subsetting to pages with lower thresholds of tokens per page, we can extract page numbers, eliminating all characters from the dataset that are non-numeric. We will keep track of pages even if they don't have numbers, as they may be useful for identifying the start/stop of an issue.

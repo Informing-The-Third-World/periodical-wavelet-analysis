@@ -2,10 +2,32 @@ import os
 import pandas as pd
 from typing import List, Optional
 import apikey
+import altair as alt
+import vl_convert as vlc
 
 from rich.console import Console
 
 console = Console()
+
+def save_chart(chart: alt.Chart, filename: str, scale_factor=2.0) -> None:
+	'''
+	Save an Altair chart using vl-convert
+	
+	:param chart: Altair chart to save
+	:param filename : The path to save the chart to
+	:param scale_factor: int or float
+		The factor to scale the image resolution by.
+		E.g. A value of `2` means two times the default resolution.
+	'''
+	with alt.data_transformers.enable("default"), alt.data_transformers.disable_max_rows():
+		if filename.split('.')[-1] == 'svg':
+			with open(filename, "w") as f:
+				f.write(vlc.vegalite_to_svg(chart.to_dict()))
+		elif filename.split('.')[-1] == 'png':
+			with open(filename, "wb") as f:
+				f.write(vlc.vegalite_to_png(chart.to_dict(), scale=scale_factor))
+		else:
+			raise ValueError("Only svg and png formats are supported")
 
 def set_data_directory_path(path: str) -> None:
 	"""
