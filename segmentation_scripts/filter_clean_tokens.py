@@ -179,6 +179,13 @@ def process_file(file_path: str, is_preidentified_periodical: bool, should_filte
 		full_df = full_df.rename(columns={'page': 'page_number'})
 	console.print(f"Volume has this many tokens: {len(full_df)}")
 	if is_preidentified_periodical:
+		if 'start_issue' not in full_df.columns:
+			console.print(f"Periodical identified as annotated but missing start_issue, with htid {full_df.htid.unique()}", style="bright_magenta")
+			should_continue = console.input("Do you want to continue the code? y/n")
+			if should_continue == 'n':
+				console.print(file_path)
+				console.print(full_df.columns)
+				sys.exit()
 		console.print(f"Volume has this many issues: {full_df.start_issue.nunique()}")
 		console.print(f"Volume has this many pages: {full_df.page_number.nunique()}")
 	# Factorize the 'issue_number' column to create 'actual_issue_number'
@@ -512,13 +519,14 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 			missing_issues = []
 			chart = None
 
-		# Detect likely covers
+		# Use dynamic cutoffs for tokens and digits
 		merged_expanded_df['is_likely_cover'] = (
-			(merged_expanded_df['scaled_tokens_per_page'] < 0.2) &  # Low tokens
-			(merged_expanded_df['scaled_digits_per_page'] < 0.2)    # Low digits
+			(merged_expanded_df['tokens_per_page'] <= tokens_dynamic_cutoff) 
 		)
+
+		# List pages marked as likely covers
 		list_of_covers = merged_expanded_df[merged_expanded_df['is_likely_cover']].page_number.unique().tolist()
-		
+
 		# Append frequencies and metadata
 		volume_frequencies.append({
 			'tokens_dominant_frequency': tokens_dominant_frequency,
@@ -566,10 +574,10 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 				vol2['tokens_positive_amplitudes'][:min_length]
 			)
 			sequential_correlations.append({
-				'volume1': vol1['volume_id'], 
-				'volume2': vol2['volume_id'], 
+				'volume1': vol1['htid'], 
+				'volume2': vol2['htid'], 
 				'correlation': corr,
-				'periodical_name': vol1['periodical_name']
+				'periodical_name': vol1['lowercase_periodical_name']
 			})
 
 		# Save sequential correlations as CSV
@@ -611,7 +619,7 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 	matching_files_df = pd.DataFrame(matching_files)
 	console.print(f"Found {len(matching_files_df)} matching files.", style="bright_green")
 
-	volume_features_output_path = os.path.join("..", "datasets", "volume_features_and_frequencies.csv")
+	volume_features_output_path = os.path.join("..", "datasets", "all_volume_features_and_frequencies.csv")
 	volume_features_exist = False
 	if os.path.exists(volume_features_output_path) and rerun_code:
 		volume_features_df = read_csv_file(volume_features_output_path)
@@ -640,7 +648,7 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 			console.print(f"No annotated files found for periodical {title}. Skipping...", style="bright_red")
 			continue
 
-		is_annotated_periodical = len(subset_matching_files_df) > 0
+		
 		volume_paths = []
 
 		for _, row in subset_preidentified_periodicals_df[subset_preidentified_periodicals_df.volume_directory.notna()].iterrows():
@@ -657,7 +665,8 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 			if only_use_annotated_periodicals and len(matched_row) == 0:
 				console.print(f"Volume {row.volume_directory} is not annotated. Skipping...", style="bright_red")
 				continue
-
+			
+			is_annotated_periodical = len(matched_row) > 0
 			file_path = matched_row.file_path.values[0] if len(matched_row) > 0 else os.path.join(data_directory_path, "HathiTrust-pcc-datasets", "datasets", row.publication_directory, "volumes", row['volume_directory'], row['volume_directory'] + "_individual_tokens.csv")
 			volume_paths.append({
 				'file_path': file_path,
@@ -688,5 +697,5 @@ if __name__ == "__main__":
 	filter_implied_zeroes = True
 	should_run_correlations = False
 	should_rerun_code = False
-	should_only_use_annotated_periodicals = True
+	should_only_use_annotated_periodicals = False
 	generate_token_frequency_analysis(filter_greater_than_numbers, filter_implied_zeroes, should_run_correlations, should_only_use_annotated_periodicals, should_rerun_code)
