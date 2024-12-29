@@ -27,7 +27,7 @@ from segmentation_scripts.utils import read_csv_file, get_data_directory_path, s
 
 
 # Function to compute Energy-to-Entropy Ratio
-def energy_entropy_ratio(signal, wavelet, level, mode='symmetric'):
+def energy_entropy_ratio(signal: np.ndarray, wavelet: str, level: int, mode: str ='symmetric') -> float:
 	"""
 	Compute energy-to-entropy ratio for wavelet coefficients.
 
@@ -54,7 +54,7 @@ def energy_entropy_ratio(signal, wavelet, level, mode='symmetric'):
 	return total_energy / entropy
 
 # Function to calculate Sparsity
-def sparsity_measure(coeffs, threshold=1e-3):
+def sparsity_measure(coeffs: list, threshold: float = 1e-6) -> float:
 	"""
 	Measure sparsity of wavelet coefficients.
 
@@ -73,7 +73,7 @@ def sparsity_measure(coeffs, threshold=1e-3):
 	return sparsity
 
 # Main Function to Evaluate Wavelet Performance
-def evaluate_wavelet_performance(signal, wavelets, modes):
+def evaluate_wavelet_performance(signal: np.ndarray, wavelets: list, modes: list) -> pd.DataFrame:
 	"""
 	Evaluate wavelet decomposition using MSE, energy-to-entropy ratio, and sparsity.
 
@@ -135,7 +135,7 @@ def evaluate_wavelet_performance(signal, wavelets, modes):
 
 def determine_best_representation(results_df, weights=None):
 	"""
-	Determine the best wavelet representation based on MSE, Energy-to-Entropy Ratio, and Sparsity.
+	Determine the best wavelet representation based on MSE, Energy-to-Entropy Ratio, and Sparsity within a volume.
 
 	Parameters:
 	-----------
