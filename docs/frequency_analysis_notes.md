@@ -1,6 +1,80 @@
-# Frequency Analysis Notes
+# Token Frequency Analysis Logic & Notes
 
-## Frequency As Wave Methods
+The goal of this document is to outline the logic and methods for analyzing token frequency data extracted from OCR text. The analysis aims to identify patterns, trends, and anomalies in the distribution of tokens across pages, volumes, or periodicals. By examining the frequency characteristics of the data, we can gain insights into the underlying structures, layouts, and content variations within the digitized documents.
+
+We primarily use **smoothed** or **standardized** token frequencies as input data for the analysis:
+
+- **Smoothed Tokens** reduce small-scale fluctuations in the data, highlighting broader trends and patterns.  
+- **Standardized Tokens** normalize the smoothed data for comparability and emphasize relative deviations from the mean.  
+
+By combining these two types of token frequencies, we capture both the overall trends and deviations from those trends, providing a comprehensive view of the data.
+
+---
+
+## Analysis Methods
+
+| Method                         | Use Smoothed | Use Standardized | Key Insights                                                                                     |
+|--------------------------------|--------------|------------------|-------------------------------------------------------------------------------------------------|
+| **Wavelet Analysis**           | ✅ (optional) | ✅               | Smoothed tokens can reduce noise, but standardized tokens highlight relative trends better for multi-scale analysis.|
+| **Autocorrelation**            | ✅ (optional)  | ✅               | Smoothing may reveal clearer periodicities, but standardization is essential for comparability across signals. |
+| **Peak Detection (absolute)**  | ✅           | ❌               | Absolute peaks from smoothed tokens help identify significant features like sections or transitions. |
+| **Peak Detection (relative)**  | ❌           | ✅               | Standardized tokens are better for identifying deviations from trends, revealing anomalies. |
+| **Spectral Centroid & Bandwidth** | ✅ (optional) | ✅               | Smoothed tokens can provide a stable signal, but standardized tokens better capture frequency variability. |
+| **Signal Envelope**            | ✅           | ❌               | Smoothing emphasizes high-level trends, useful for detecting dense vs. sparse regions.  |
+| **Dominant Peak Ratios**       | ✅ (optional) | ✅               | Using smoothed tokens avoids artifacts, while standardized tokens highlight relative dynamics.|
+| **Dynamic Range & Energy Distribution** | ✅ (optional)  | ✅               | Smoothed tokens stabilize energy calculations; standardization emphasizes variability. |
+| **Visualizing the Wave Shape** | ✅           | ❌               | Reveals the overall shape and trends in the token signal across pages.                         |
+| **Clustering or Classification** | ✅         | ✅               | Combines both absolute and relative patterns for better grouping and comparisons. Both are needed: smoothed for stability, standardized for relative comparability.|
+
+To compare the value of each method, we do normalization on the token frequencies. This allows us to compare the relative importance of each method in capturing the underlying patterns and trends in the data.
+
+---
+
+## Key Difference Between Smoothed and Standardized Tokens
+
+| Feature               | Smoothed Tokens                                   | Standardized Tokens                                     |
+|-----------------------|---------------------------------------------------|-------------------------------------------------------|
+| **Purpose**           | Reduce small-scale fluctuations (noise).          | Normalize the smoothed data for comparability.        |
+| **Transformation**    | Moving average (windowed smoothing).              | Z-score transformation (mean = 0, std = 1).           |
+| **Effect**            | Smooths trends but retains the original scale.    | Centers around 0 and scales values to std-dev units.  |
+| **Blanks Handling**   | Keeps blanks (0) unchanged using `.where()`.      | Blanks are standardized relative to smoothed mean/std-dev. |
+| **Interpretation**    | Reflects token trends over a local window.        | Highlights deviations relative to the smoothed mean.  |
+| **Values**            | Original token range but smoothed.                | Centered around 0 with no units.                      |
+
+---
+
+## Why Both Are Useful
+
+### **Smoothed Tokens (`smoothed_tokens_per_page`)**
+1. **Broader Layout Trends**:
+   - Highlights large-scale shifts in token density, useful for detecting headers, sections, or OCR artifacts.
+   - Retains original scale, making absolute counts and comparisons straightforward.
+2. **Applications**:
+   - Signal envelope analysis.
+   - Identifying transitions, like covers or high-density content areas.
+   - Input for clustering to capture absolute trends.
+
+### **Standardized Tokens (`standardized_tokens_per_page`)**
+1. **Cross-Signal Comparisons**:
+   - Normalized values allow comparison of patterns across volumes or periodicals with different scales.
+   - Emphasizes relative deviations (peaks/valleys) in token counts.
+2. **Applications**:
+   - Wavelet analysis to detect multiscale patterns.
+   - Clustering or classification, especially when combined with smoothed tokens.
+   - Autocorrelation and frequency-domain analyses for periodicity detection.
+
+---
+
+## Method Interdependence
+
+Some methods complement each other and should be used iteratively:
+- **Wavelet Analysis** (standardized) can reveal multiscale patterns, which might guide **Peak Detection** (absolute or relative).
+- **Autocorrelation** results (standardized) can inform clustering by suggesting likely periodicities or issue lengths.
+- **Dynamic Range and Energy Distribution** (standardized) can enhance clustering by providing additional signal characteristics.
+
+---
+
+## Proposed Workflow
 
 ### Wave Shape Analysis
 
@@ -182,5 +256,8 @@ The dynamic range of a signal, defined as the difference between the maximum and
 ### Visualizing the Wave Shape
 
 Visualizing the wave shape can provide an intuitive understanding of the signal's structure and dynamics. Plotting the signal in the time domain can reveal patterns and trends, while frequency domain representations like spectrograms can show the frequency content over time.
+
+
+
 
 

@@ -26,7 +26,6 @@ sys.path.append("..")
 from segmentation_scripts.utils import read_csv_file, get_data_directory_path, save_chart, process_file, generate_table
 
 
-# Function to compute Energy-to-Entropy Ratio
 def energy_entropy_ratio(signal: np.ndarray, wavelet: str, level: int, mode: str ='symmetric') -> float:
 	"""
 	Compute energy-to-entropy ratio for wavelet coefficients.
@@ -53,7 +52,6 @@ def energy_entropy_ratio(signal: np.ndarray, wavelet: str, level: int, mode: str
 	entropy = -np.sum([e / total_energy * np.log2(e / total_energy) for e in energy if e > 0])
 	return total_energy / entropy
 
-# Function to calculate Sparsity
 def sparsity_measure(coeffs: list, threshold: float = 1e-6) -> float:
 	"""
 	Measure sparsity of wavelet coefficients.
@@ -72,8 +70,7 @@ def sparsity_measure(coeffs: list, threshold: float = 1e-6) -> float:
 	sparsity = np.sum(np.abs(total_coeffs) < threshold) / len(total_coeffs)
 	return sparsity
 
-# Main Function to Evaluate Wavelet Performance
-def evaluate_wavelet_performance(signal: np.ndarray, wavelets: list, modes: list) -> pd.DataFrame:
+def evaluate_wavelet_performance(signal: np.ndarray, wavelets: list, modes: list, signal_type: str) -> pd.DataFrame:
 	"""
 	Evaluate wavelet decomposition using MSE, energy-to-entropy ratio, and sparsity.
 
@@ -85,6 +82,8 @@ def evaluate_wavelet_performance(signal: np.ndarray, wavelets: list, modes: list
 		Wavelet names to test.
 	modes : list of str
 		Signal extension modes to test.
+	signal_type : str
+		Type of signal being analyzed. Either raw or smoothed.
 
 	Returns:
 	--------
@@ -93,29 +92,23 @@ def evaluate_wavelet_performance(signal: np.ndarray, wavelets: list, modes: list
 	"""
 	results = []
 
-	for wavelet in tqdm(wavelets, desc="Testing Wavelets"):
+	for wavelet in tqdm(wavelets, desc=f"Testing Wavelets for {signal_type}"):
 		try:
-			# Dynamically determine the maximum level for the current wavelet
 			max_level = pywt.dwt_max_level(len(signal), filter_len=wavelet)
-			levels = range(1, max_level + 1)  # Levels: 1 to max_level
-
-			for level in levels:
+			for level in range(1, max_level + 1):
 				for mode in modes:
 					try:
-						# Decompose and reconstruct
 						coeffs = pywt.wavedec(signal, wavelet, level=level, mode=mode)
-						reconstructed_signal = pywt.waverec(coeffs, wavelet, mode=mode)
-						
-						# Ensure reconstructed signal matches the input length
-						reconstructed_signal = reconstructed_signal[:len(signal)]
+						reconstructed_signal = pywt.waverec(coeffs, wavelet, mode=mode)[:len(signal)]
 
-						# Compute Metrics
+						# Metrics
 						mse = np.mean((signal - reconstructed_signal) ** 2)
-						energy_entropy = energy_entropy_ratio(signal, wavelet, level, mode)
+						energy_entropy = energy_entropy_ratio(coeffs, wavelet, level, mode)
 						sparsity = sparsity_measure(coeffs)
 
 						# Append Results
 						results.append({
+							'signal_type': signal_type,
 							'wavelet': wavelet,
 							'wavelet_level': level,
 							'wavelet_mode': mode,
@@ -123,19 +116,15 @@ def evaluate_wavelet_performance(signal: np.ndarray, wavelets: list, modes: list
 							'wavelet_energy_entropy': energy_entropy,
 							'wavelet_sparsity': sparsity
 						})
-					except ValueError as e:
-						console.print(f"Skipping {wavelet} Level {level} Mode {mode}: {e}", style="bright_red")
+					except ValueError:
+						console.print(f"Skipping wavelet {wavelet} with level {level} and mode {mode} due to ValueError.", style="bright_red")
 		except Exception as e:
-			console.print(f"Error testing wavelet {wavelet}: {e}", style="bright_red")
+			console.print(f"Skipping wavelet {wavelet} due to exception: {str(e)}", style="bright_red")
+	return pd.DataFrame(results)
 
-	# Convert to DataFrame
-	results_df = pd.DataFrame(results)
-	return results_df
-
-
-def determine_best_representation(results_df, weights=None):
+def determine_best_wavelet_representation(results_df: pd.DataFrame, weights: dict = None, is_combined: bool = False) -> tuple:
 	"""
-	Determine the best wavelet representation based on MSE, Energy-to-Entropy Ratio, and Sparsity within a volume.
+	Determine the best wavelet representation based on MSE, Energy-to-Entropy Ratio, and Sparsity within a volume. Normalize and combine scores to rank the results.
 
 	Parameters:
 	-----------
@@ -145,6 +134,8 @@ def determine_best_representation(results_df, weights=None):
 	weights : dict, optional
 		Dictionary of weights for each metric. Example:
 		{'MSE': 0.5, 'Energy-to-Entropy': 0.3, 'Sparsity': 0.2}
+	is_combined : bool, optional
+		Flag indicating whether the results are combined. If True, the prefix 'combined_' is used.
 
 	Returns:
 	--------
@@ -161,41 +152,86 @@ def determine_best_representation(results_df, weights=None):
 	assert sum(weights.values()) == 1.0, "Weights must sum to 1."
 
 	# Copy the DataFrame to avoid modifying the original
-	df = results_df.copy()
+	normalized_df = results_df.copy()
 
 	# Normalize MSE, Energy-to-Entropy, and Sparsity
 	scaler = MinMaxScaler()
-	df[['wavelet_mse_norm', 'wavelet_energy_entropy_norm', 'wavelet_sparsity_norm']] = scaler.fit_transform(
-		df[['wavelet_mse', 'wavelet_energy_entropy', 'wavelet_sparsity']]
+	prefix = 'combined_' if is_combined else ''
+	normalized_df[[f'{prefix}wavelet_mse_norm', f'{prefix}wavelet_energy_entropy_norm', f'{prefix}wavelet_sparsity_norm']] = scaler.fit_transform(
+		normalized_df[['wavelet_mse', 'wavelet_energy_entropy', 'wavelet_sparsity']]
 	)
-
-	# Invert MSE because lower MSE is better
-	df['wavelet_mse_norm'] = 1 - df['wavelet_mse_norm']
+	normalized_df[f'{prefix}wavelet_mse_norm'] = 1 - normalized_df[f'{prefix}wavelet_mse_norm']  # Lower MSE is better
 
 	# Compute Combined Score
-	df['wavelet_combined_score'] = (
-		weights['wavelet_mse'] * df['wavelet_mse_norm'] +
-		weights['wavelet_energy_entropy'] * df['wavelet_energy_entropy_norm'] +
-		weights['wavelet_sparsity'] * df['wavelet_sparsity_norm']
+	normalized_df[f'{prefix}wavelet_combined_score'] = (
+		weights['wavelet_mse'] * normalized_df[f'{prefix}wavelet_mse_norm'] +
+		weights['wavelet_energy_entropy'] * normalized_df[f'{prefix}wavelet_energy_entropy_norm'] +
+		weights['wavelet_sparsity'] * normalized_df[f'{prefix}wavelet_sparsity_norm']
 	)
 
-	# Rank results by Combined Score
-	df = df.sort_values(by='wavelet_combined_score', ascending=False).reset_index(drop=True)
-	df['wavelet_rank'] = df.index + 1
+	# Rank results
+	ranked_results_df = normalized_df.sort_values(by=f'{prefix}wavelet_combined_score', ascending=False).reset_index(drop=True)
+	ranked_results_df[f'{prefix}wavelet_rank'] = ranked_results_df.index + 1
 
 	# Return the best configuration and the ranked results
-	best_config = df[0:1]
-	generate_table(best_config, "Best Configuration")
-	return best_config, df
+	best_config = ranked_results_df[0:1]
+	return best_config, ranked_results_df
 
-def calculate_dominant_frequency(tokens_normalized: np.ndarray, tokens_mean: float, tokens_std: float, page_type: str, min_tokens: float) -> tuple:
+def compare_and_rank_wavelet_metrics(raw_signal: np.ndarray, smoothed_signal: np.ndarray, wavelets: list, modes: list, weights: dict) -> tuple:
+	"""
+	Compare wavelet metrics for raw and smoothed tokens and determine the best representation.
+
+	Parameters:
+	-----------
+	raw_signal : np.ndarray
+		Raw tokens per page.
+	smoothed_signal : np.ndarray
+		Smoothed tokens per page.
+	wavelets : list of str
+		List of wavelet names to test.
+	modes : list of str
+		List of signal extension modes to test.
+	weights : dict
+		Weights for MSE, Energy-to-Entropy, and Sparsity (e.g., {'wavelet_mse': 0.5, 'wavelet_energy_entropy': 0.3, 'wavelet_sparsity': 0.2}).
+
+	Returns:
+	--------
+	tuple:
+		- fianlized_combined_results: pd.DataFrame
+		  Combined wavelet metrics for raw and smoothed tokens.
+		- best_combined_results: pd.DataFrame
+		  Best combined wavelet configuration.
+	"""
+	
+	# Evaluate metrics for raw and smoothed signals
+	raw_results = evaluate_wavelet_performance(raw_signal, wavelets, modes, signal_type='raw')
+	smoothed_results = evaluate_wavelet_performance(smoothed_signal, wavelets, modes, signal_type='smoothed')
+
+	# Determine best representations for each signal type
+	best_raw, ranked_raw = determine_best_wavelet_representation(raw_results, weights)
+	best_smoothed, ranked_smoothed = determine_best_wavelet_representation(smoothed_results, weights)
+
+	# Combine results
+	combined_results = pd.concat([ranked_raw, ranked_smoothed], ignore_index=True)
+
+	# Determine best combined representation
+	best_combined_results, finalized_combined_results = determine_best_wavelet_representation(combined_results, weights, is_combined=True)
+
+	# Display results
+	generate_table(best_raw, "Best Wavelet Configuration for Raw Tokens")
+	generate_table(best_smoothed, "Best Wavelet Configuration for Smoothed Tokens")
+	generate_table(best_combined_results, "Best Combined Wavelet Configuration")
+
+	return finalized_combined_results, best_combined_results
+
+def calculate_dominant_frequency(tokens_signal: np.ndarray, tokens_mean: float, tokens_std: float, page_type: str, min_tokens: float) -> tuple:
 	"""
 	Calculate the dominant frequency of the given signal and a dynamic cutoff.
 
 	Parameters
 	----------
-	tokens_normalized : np.ndarray
-		The normalized signal to be analyzed.
+	tokens_signal : np.ndarray
+		The tokens signal to be analyzed.
 	tokens_mean : float
 		Mean of the original tokens per page.
 	tokens_std : float
@@ -214,7 +250,7 @@ def calculate_dominant_frequency(tokens_normalized: np.ndarray, tokens_mean: flo
 		- dynamic_cutoff_original_scale: Dynamic cutoff in the original scale.
 	"""
 	# Perform FFT
-	tokens_fft = fft(tokens_normalized)
+	tokens_fft = fft(tokens_signal)
 	frequencies = np.fft.fftfreq(len(tokens_fft))
 
 	# Only look at positive frequencies
@@ -228,17 +264,18 @@ def calculate_dominant_frequency(tokens_normalized: np.ndarray, tokens_mean: flo
 		dominant_frequency = positive_frequencies[dominant_frequency_index]
 	else:
 		dominant_frequency = None  # Handle cases with no significant peaks
+		console.print(f"No significant peaks found for {page_type}", style="bright_red")
 
 	# Calculate a dynamic cutoff
 	if len(peaks) > 0:
 		peak_amplitude = np.max(positive_amplitudes[1:][peaks])
-		dynamic_cutoff_normalized = np.median(tokens_normalized) - peak_amplitude
-		dynamic_cutoff_normalized = max(dynamic_cutoff_normalized, np.percentile(tokens_normalized, 10))  # Ensure it's not too low
+		dynamic_cutoff_signal = np.median(tokens_signal) - peak_amplitude
+		dynamic_cutoff_signal = max(dynamic_cutoff_signal, np.percentile(tokens_signal, 10))  # Ensure it's not too low
 	else:
-		dynamic_cutoff_normalized = np.percentile(tokens_normalized, 10)  # Fallback to 10th percentile if no peaks
+		dynamic_cutoff_signal = np.percentile(tokens_signal, 10)  # Fallback to 10th percentile if no peaks
 
 	# Convert the dynamic cutoff back to the original scale
-	dynamic_cutoff_original_scale = (dynamic_cutoff_normalized * tokens_std) + tokens_mean
+	dynamic_cutoff_original_scale = (dynamic_cutoff_signal * tokens_std) + tokens_mean
 
 	# Clamp the dynamic cutoff to be at least the minimum tokens per page
 	dynamic_cutoff_original_scale = max(dynamic_cutoff_original_scale, min_tokens)
@@ -266,7 +303,7 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 	Returns
 	-------
 	tuple
-		A tuple containing the processed DataFrame, normalized token signals, and normalized digit signals.
+		A tuple containing the merged expanded DataFrame, the grouped DataFrame, the standardized token signal, the smoothed token signal, the mean tokens per page, and the standard deviation of tokens per page.
 	"""
 	expanded_df, subset_digits, grouped_df = process_file(file_path, preidentified_periodical, should_filter_greater_than_numbers, should_filter_implied_zeroes)
 	
@@ -288,34 +325,46 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 	merged_expanded_df = subset_expanded_df.merge(min_subset_digits, on=['original_page_number', 'page_number'], how='left')
 	merged_expanded_df['tokens_per_page'] = merged_expanded_df['tokens_per_page'].fillna(0)
 	merged_expanded_df['digits_per_page'] = merged_expanded_df['digits_per_page'].fillna(0)
+	merged_expanded_df = merged_expanded_df.sort_values(by='page_number')
 	
-	# Smooth the data
-	merged_expanded_df['smoothed_tokens_per_page'] = merged_expanded_df['tokens_per_page'].rolling(window=3, center=True).mean()
-	merged_expanded_df['smoothed_digits_per_page'] = merged_expanded_df['digits_per_page'].rolling(window=3, center=True).mean()
+	# Apply smoothing (moving average)
+	merged_expanded_df['smoothed_tokens_per_page'] = (
+		merged_expanded_df['tokens_per_page']
+		.where(merged_expanded_df['tokens_per_page'] > 0)
+		.rolling(window=5, center=True)
+		.mean()
+		.fillna(0)
+	)
+	# Standardize smoothed signals
+	merged_expanded_df['standardized_tokens_per_page'] = (
+		(merged_expanded_df['smoothed_tokens_per_page'] - merged_expanded_df['smoothed_tokens_per_page'].mean()) 
+		/ merged_expanded_df['smoothed_tokens_per_page'].std()
+	)
+	merged_expanded_df['smoothed_digits_per_page'] = (
+		merged_expanded_df['digits_per_page']
+		.where(merged_expanded_df['digits_per_page'] > 0)
+		.rolling(window=5, center=True)
+		.mean()
+		.fillna(0)
+	)
+
+	merged_expanded_df['standardized_digits_per_page'] = (
+		(merged_expanded_df['smoothed_digits_per_page'] - merged_expanded_df['smoothed_digits_per_page'].mean()) 
+		/ merged_expanded_df['smoothed_digits_per_page'].std()
+	)
 	
-	# Scale the data
-	scaler = MinMaxScaler()
-	merged_expanded_df['scaled_tokens_per_page'] = scaler.fit_transform(merged_expanded_df[['smoothed_tokens_per_page']])
-	merged_expanded_df['scaled_digits_per_page'] = scaler.fit_transform(merged_expanded_df[['smoothed_digits_per_page']])
-	
-	merged_expanded_df['scaled_tokens_per_page'] = merged_expanded_df['scaled_tokens_per_page'].fillna(0)
-	merged_expanded_df['scaled_digits_per_page'] = merged_expanded_df['scaled_digits_per_page'].fillna(0)
-	
-	generate_table(merged_expanded_df[['page_number', 'tokens_per_page', 'smoothed_tokens_per_page', 'scaled_tokens_per_page', 'digits_per_page', 'smoothed_digits_per_page', 'scaled_digits_per_page']].head(2), "Token and Digit Data")
+	table_cols = ['page_number', 'tokens_per_page', 'smoothed_tokens_per_page', 'standardized_tokens_per_page', 'digits_per_page', 'smoothed_digits_per_page', 'standardized_digits_per_page'] 
+	table_title = "Token and Digit Data"
+	generate_table(merged_expanded_df[table_cols].head(2), table_title)
 	
 	# Normalize signals for FFT and autocorrelation
-	scaled_tokens = merged_expanded_df['scaled_tokens_per_page'].dropna().values
-	scaled_digits = merged_expanded_df['scaled_digits_per_page'].dropna().values
-	
-	tokens_normalized = (scaled_tokens - np.mean(scaled_tokens)) / np.std(scaled_tokens)
-	digits_normalized = (scaled_digits - np.mean(scaled_digits)) / np.std(scaled_digits)
+	tokens_standardized_signal = merged_expanded_df['standardized_tokens_per_page'].values
+	tokens_smoothed_signal = merged_expanded_df['standardized_digits_per_page'].values
 
 	tokens_mean = merged_expanded_df['tokens_per_page'].mean()
-	digits_mean = merged_expanded_df['digits_per_page'].mean()
 	tokens_std = merged_expanded_df['tokens_per_page'].std()
-	digits_std = merged_expanded_df['digits_per_page'].std()
 	
-	return merged_expanded_df, grouped_df, tokens_normalized, digits_normalized, tokens_mean, tokens_std, digits_mean, digits_std
+	return merged_expanded_df, grouped_df, tokens_standardized_signal, tokens_smoothed_signal, tokens_mean, tokens_std
 
 def plot_volume_frequencies_matplotlib(volume_frequencies: list, periodical_name: str, output_dir: str):
 	"""
@@ -396,8 +445,6 @@ def visualize_annotated_periodicals(merged_expanded_df, grouped_df, output_dir, 
 	- output_dir: Directory to save the visualization.
 	- periodical_name: Name of the periodical.
 	"""
-
-
 	# Create the base Altair chart
 	selection = alt.selection_point(fields=['start_issue'], bind='legend')
 	base = alt.Chart(merged_expanded_df[['page_number', 'tokens_per_page', 'start_issue', 'htid']]).mark_line(point=True).encode(
@@ -447,7 +494,7 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 	periodical_name = volume_paths_df['lowercase_periodical_name'].unique()[0]
 	altair_charts = []
 	for _, volume in volume_paths_df.iterrows():
-		merged_expanded_df, grouped_df, tokens_normalized, digits_normalized, tokens_mean, tokens_std, digits_mean, digits_std = process_tokens(
+		merged_expanded_df, grouped_df, tokens_standardized_signal, tokens_smoothed_signal, tokens_mean, tokens_std = process_tokens(
 			volume['file_path'], 
 			volume['is_annotated_periodical'], 
 			volume['should_filter_greater_than_numbers'], 
@@ -456,14 +503,15 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 		# Calculate wavelets 
 		wavelets = ['db4', 'haar', 'sym4', 'coif5', 'bior2.2']  # Wavelet families to test
 		modes = ['symmetric', 'periodization', 'constant']      # Signal extension modes
-		wavelet_results_df = evaluate_wavelet_performance(tokens_normalized, wavelets, modes)
-		best_wavelet, processed_wavelet_results_df = determine_best_representation(wavelet_results_df)
+		weights = {'wavelet_mse': 0.5, 'wavelet_energy_entropy': 0.3, 'wavelet_sparsity': 0.2}  # Weights for metrics
+		wavelet_results_df, best_wavelet_config = compare_and_rank_wavelet_metrics(
+			tokens_standardized_signal, tokens_smoothed_signal, wavelets, modes, weights
+		)
 
 		# Calculate dominant frequencies for tokens and digits
 		tokens_dominant_frequency, tokens_positive_frequencies, tokens_positive_amplitudes, tokens_dynamic_cutoff = calculate_dominant_frequency(
-			tokens_normalized, tokens_mean, tokens_std, "tokens_per_page",  merged_expanded_df['tokens_per_page'].min()
+			tokens_standardized_signal, tokens_mean, tokens_std, "tokens_per_page",  merged_expanded_df['tokens_per_page'].min()
 		)
-		digits_dominant_frequency, digits_positive_frequencies, digits_positive_amplitudes, digits_dynamic_cutoff = calculate_dominant_frequency(digits_normalized, digits_mean, digits_std, "digits_per_page", merged_expanded_df['digits_per_page'].min())
 		
 		if volume['is_annotated_periodical'] and len(grouped_df) > 1:
 			missing_issues, chart = visualize_annotated_periodicals(merged_expanded_df, grouped_df, output_dir, volume['lowercase_periodical_name'], tokens_dynamic_cutoff)
@@ -481,16 +529,13 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 		list_of_covers = merged_expanded_df[merged_expanded_df['is_likely_cover']].page_number.unique().tolist()
 
 		# Convert best_wavelet row to dictionary
-		best_wavelet_dict = best_wavelet.iloc[0].to_dict()
+		best_wavelet_dict = best_wavelet_config.iloc[0].to_dict()
 
 		# Append frequencies and metadata
 		volume_data = {
 			'tokens_dominant_frequency': tokens_dominant_frequency,
 			'tokens_positive_frequencies': tokens_positive_frequencies,
 			'tokens_positive_amplitudes': tokens_positive_amplitudes,
-			'digits_dominant_frequency': digits_dominant_frequency,
-			'digits_positive_frequencies': digits_positive_frequencies,
-			'digits_positive_amplitudes': digits_positive_amplitudes,
 			'htid': merged_expanded_df['htid'].unique()[0],
 			'lowercase_periodical_name': volume['lowercase_periodical_name'],
 			'avg_tokens': merged_expanded_df['tokens_per_page'].mean(),
@@ -504,7 +549,6 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 			'page_numbers': merged_expanded_df['page_number'],
 			'digits_per_page': merged_expanded_df['digits_per_page'],
 			'tokens_dynamic_cutoff': tokens_dynamic_cutoff,
-			'digits_dynamic_cutoff': digits_dynamic_cutoff,
 			'missing_issues': missing_issues
 		}
 
@@ -512,6 +556,12 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 		volume_data.update(best_wavelet_dict)
 
 		volume_frequencies.append(volume_data)
+
+		volume_df = pd.DataFrame(volume_frequencies)
+		# Concat the full wavelet results to the volume data and store as CSV
+		full_wavelet_results = pd.concat([wavelet_results_df, volume_df], ignore_index=True, axis=1)
+		file_path = volume['file_path'].replace("_individual_tokens.csv", "_wavelet_results.csv")
+		full_wavelet_results.to_csv(file_path, index=False)
 
 	# Create DataFrame from volume frequencies
 	volume_frequencies_df = pd.DataFrame(volume_frequencies)
