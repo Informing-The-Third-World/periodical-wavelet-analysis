@@ -26,101 +26,104 @@ sys.path.append("..")
 from segmentation_scripts.utils import read_csv_file, get_data_directory_path, save_chart, process_file, generate_table
 
 
-def energy_entropy_ratio(signal: np.ndarray, wavelet: str, level: int, mode: str ='symmetric') -> float:
-	"""
-	Compute energy-to-entropy ratio for wavelet coefficients.
+def energy_entropy_ratio(coeffs: list) -> float:
+    """
+    Compute energy-to-entropy ratio for wavelet coefficients.
 
-	Parameters:
-	-----------
-	signal : np.ndarray
-		Input signal.
-	wavelet : str
-		Wavelet name.
-	level : int
-		Decomposition level.
-	mode : str
-		Signal extension mode.
+    Parameters:
+    -----------
+    coeffs : list of np.ndarray
+        Wavelet decomposition coefficients.
 
-	Returns:
-	--------
-	ratio : float
-		Energy-to-entropy ratio.
-	"""
-	coeffs = pywt.wavedec(signal, wavelet, level=level, mode=mode)
-	energy = [np.sum(np.square(c)) for c in coeffs]
-	total_energy = np.sum(energy)
-	entropy = -np.sum([e / total_energy * np.log2(e / total_energy) for e in energy if e > 0])
-	return total_energy / entropy
+    Returns:
+    --------
+    ratio : float
+        Energy-to-entropy ratio.
+    """
+    energy = [np.sum(np.square(c)) for c in coeffs]
+    total_energy = np.sum(energy)
+    entropy = -np.sum([e / total_energy * np.log2(e / total_energy) for e in energy if e > 0])
+    return total_energy / entropy
 
-def sparsity_measure(coeffs: list, threshold: float = 1e-6) -> float:
-	"""
-	Measure sparsity of wavelet coefficients.
+def sparsity_measure(coeffs: list, threshold: float = 1e-3) -> float:
+    """
+    Measure sparsity of wavelet coefficients.
 
-	Parameters:
-	-----------
-	coeffs : list of np.ndarray
-		Wavelet decomposition coefficients.
+    Parameters:
+    -----------
+    coeffs : list of np.ndarray
+        Wavelet decomposition coefficients.
+	threshold : float, optional
+		Threshold for near-zero coefficients.
 
-	Returns:
-	--------
-	sparsity : float
-		Percentage of near-zero coefficients.
-	"""
-	total_coeffs = np.concatenate(coeffs)
-	sparsity = np.sum(np.abs(total_coeffs) < threshold) / len(total_coeffs)
-	return sparsity
+    Returns:
+    --------
+    sparsity : float
+        Percentage of near-zero coefficients.
+    """
+    total_coeffs = np.concatenate(coeffs)
+    sparsity = np.sum(np.abs(total_coeffs) < threshold) / len(total_coeffs)
+    return sparsity
 
 def evaluate_wavelet_performance(signal: np.ndarray, wavelets: list, modes: list, signal_type: str) -> pd.DataFrame:
-	"""
-	Evaluate wavelet decomposition using MSE, energy-to-entropy ratio, and sparsity.
+    """
+    Evaluate wavelet decomposition using MSE, energy-to-entropy ratio, and sparsity for a given signal type.
 
-	Parameters:
-	-----------
-	signal : np.ndarray
-		Original signal.
-	wavelets : list of str
-		Wavelet names to test.
-	modes : list of str
-		Signal extension modes to test.
-	signal_type : str
-		Type of signal being analyzed. Either raw or smoothed.
+    Parameters:
+    -----------
+    signal : np.ndarray
+        Signal to analyze (raw or smoothed tokens).
+    wavelets : list of str
+        List of wavelet names to test.
+    modes : list of str
+        List of signal extension modes to test.
+    signal_type : str
+        The type of signal being analyzed ('raw' or 'smoothed').
 
-	Returns:
-	--------
-	results_df : pd.DataFrame
-		Combined results of MSE, energy-to-entropy ratio, and sparsity.
-	"""
-	results = []
+    Returns:
+    --------
+    pd.DataFrame
+        Results for wavelet analysis.
+    """
+    results = []
 
-	for wavelet in tqdm(wavelets, desc=f"Testing Wavelets for {signal_type}"):
-		try:
-			max_level = pywt.dwt_max_level(len(signal), filter_len=wavelet)
-			for level in range(1, max_level + 1):
-				for mode in modes:
-					try:
-						coeffs = pywt.wavedec(signal, wavelet, level=level, mode=mode)
-						reconstructed_signal = pywt.waverec(coeffs, wavelet, mode=mode)[:len(signal)]
+    for wavelet in tqdm(wavelets, desc=f"Testing Wavelets for {signal_type}"):
+        try:
+            wavelet_filter_len = pywt.Wavelet(wavelet).dec_len
+            if len(signal) < wavelet_filter_len:
+                raise ValueError(f"Signal is too short for wavelet {wavelet}")
 
-						# Metrics
-						mse = np.mean((signal - reconstructed_signal) ** 2)
-						energy_entropy = energy_entropy_ratio(coeffs, wavelet, level, mode)
-						sparsity = sparsity_measure(coeffs)
+            max_level = pywt.dwt_max_level(len(signal), filter_len=wavelet_filter_len)
+            for level in range(1, max_level + 1):
+                for mode in modes:
+                    try:
+                        # Decompose signal
+                        coeffs = pywt.wavedec(signal, wavelet, level=level, mode=mode)
 
-						# Append Results
-						results.append({
-							'signal_type': signal_type,
-							'wavelet': wavelet,
-							'wavelet_level': level,
-							'wavelet_mode': mode,
-							'wavelet_mse': mse,
-							'wavelet_energy_entropy': energy_entropy,
-							'wavelet_sparsity': sparsity
-						})
-					except ValueError:
-						console.print(f"Skipping wavelet {wavelet} with level {level} and mode {mode} due to ValueError.", style="bright_red")
-		except Exception as e:
-			console.print(f"Skipping wavelet {wavelet} due to exception: {str(e)}", style="bright_red")
-	return pd.DataFrame(results)
+                        # Reconstruct signal
+                        reconstructed_signal = pywt.waverec(coeffs, wavelet, mode=mode)[:len(signal)]
+
+                        # Compute Metrics
+                        mse = np.mean((signal - reconstructed_signal) ** 2)
+                        energy_entropy = energy_entropy_ratio(coeffs)
+                        sparsity = sparsity_measure(coeffs)
+
+                        # Append Results
+                        results.append({
+                            'signal_type': signal_type,
+                            'wavelet': wavelet,
+                            'wavelet_level': level,
+                            'wavelet_mode': mode,
+                            'wavelet_mse': mse,
+                            'wavelet_energy_entropy': energy_entropy,
+                            'wavelet_sparsity': sparsity
+                        })
+                    except ValueError as e:
+                        print(f"Skipping wavelet {wavelet}, level {level}, mode {mode}: {e}")
+        except Exception as e:
+            print(f"Error testing wavelet {wavelet}: {e}")
+
+    return pd.DataFrame(results)
 
 def determine_best_wavelet_representation(results_df: pd.DataFrame, weights: dict = None, is_combined: bool = False) -> tuple:
 	"""
@@ -187,7 +190,8 @@ def determine_best_wavelet_representation(results_df: pd.DataFrame, weights: dic
 
 	# Return the best configuration and the ranked results
 	best_config = ranked_results_df[0:1]
-	correlation_norm_zscore = ranked_results_df[['combined_wavelet_norm_combined_score', 'combined_wavelet_zscore_combined_score']].corr().iloc[0, 1]
+	correlation_norm_zscore = ranked_results_df[[f'{prefix}wavelet_norm_combined_score', f'{prefix}wavelet_zscore_combined_score']].corr().iloc[0, 1]
+
 	return best_config, ranked_results_df, correlation_norm_zscore
 
 def compare_and_rank_wavelet_metrics(raw_signal: np.ndarray, smoothed_signal: np.ndarray, wavelets: list, modes: list, weights: dict) -> tuple:
@@ -709,7 +713,8 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 
 		volume_paths_df = pd.DataFrame(volume_paths)
 		volume_frequencies = generate_volume_embeddings(volume_paths_df, output_dir="../figures", run_correlations=should_run_correlations)
-
+		# Drop amplitutde and frequency columns for saving file space
+		volume_frequencies = volume_frequencies.drop(columns=['raw_tokens_positive_frequencies', 'raw_tokens_positive_amplitudes', 'smoothed_tokens_positive_frequencies', 'smoothed_tokens_positive_amplitudes'])
 		# Save volume frequencies to CSV
 		if os.path.exists(volume_features_output_path):
 			volume_frequencies.to_csv(volume_features_output_path, mode='a', index=False, header=False)
