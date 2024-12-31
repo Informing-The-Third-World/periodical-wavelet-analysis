@@ -241,75 +241,125 @@ def compare_and_rank_wavelet_metrics(raw_signal: np.ndarray, smoothed_signal: np
 
 	return finalized_combined_results, best_combined_results, combined_correlation
 
-def calculate_dominant_frequency(tokens_signal: np.ndarray, page_type: str, min_tokens: float) -> dict:
-	"""
-	Calculate the dominant frequency of the given signal and a dynamic cutoff.
+def calculate_signal_metrics(
+    tokens_signal: np.ndarray,
+    use_signal_type: str,
+    min_tokens: float,
+    prominence=1.0,
+    distance=5,
+    verbose=False
+) -> dict:
+    """
+    Calculate metrics for a given signal, including dominant frequency, dynamic cutoff,
+    relative peak detection, autocorrelation, signal envelope, and spectral features.
 
-	Parameters
-	----------
-	tokens_signal : np.ndarray
-		The tokens signal to be analyzed.
-	page_type : str
-		The type of page being analyzed (e.g., raw or smoothed "tokens_per_page").
-	min_tokens : float
-		The minimum observed tokens per page in the original scale.
+    Parameters
+    ----------
+    tokens_signal : np.ndarray
+        The signal to be analyzed.
+    use_signal_type : str
+        The type of page being analyzed (e.g., raw or smoothed "tokens_per_page").
+    min_tokens : float
+        The minimum observed tokens per page in the original scale.
+    prominence : float, optional
+        Minimum prominence of peaks for relative detection.
+    distance : int, optional
+        Minimum distance between peaks for relative detection.
+    verbose : bool, optional
+        Whether to log detailed metrics for debugging.
 
-	Returns
-	-------
-	dict
-		- representation: The type of page being analyzed.
-		- dominant_frequency: The dominant frequency of the signal.
-		- dynamic_cutoff: The dynamic cutoff in the original scale.
-		- num_peaks: The number of significant peaks in the signal.
-		- peak_amplitude: The amplitude of the dominant peak.
-		- positive_frequencies: The positive frequencies.
-		- positive_amplitudes: The positive amplitudes.
-	"""
-	# Perform FFT
-	tokens_fft = fft(tokens_signal)
-	frequencies = np.fft.fftfreq(len(tokens_fft))
+    Returns
+    -------
+    dict
+        Results containing signal metrics.
+    """
+    try:
+        # Perform FFT for frequency analysis
+        tokens_fft = fft(tokens_signal)
+        frequencies = np.fft.fftfreq(len(tokens_fft))
 
-	# Only look at positive frequencies
-	positive_frequencies = frequencies[:len(frequencies)//2]
-	positive_amplitudes = np.abs(tokens_fft[:len(tokens_fft)//2])
+        # Analyze positive frequencies and amplitudes
+        positive_frequencies = frequencies[:len(frequencies)//2]
+        positive_amplitudes = np.abs(tokens_fft[:len(tokens_fft)//2])
 
-	# Find the dominant frequency (ignoring the DC component)
-	peaks, _ = find_peaks(positive_amplitudes[1:])
-	peak_amplitude = np.max(positive_amplitudes[1:][peaks]) if len(peaks) > 0 else 0
-	num_peaks = len(peaks)
-	if len(peaks) > 0:
-		dominant_frequency_index = peaks[np.argmax(positive_amplitudes[1:][peaks])] + 1
-		dominant_frequency = positive_frequencies[dominant_frequency_index]
-	else:
-		dominant_frequency = None  # Handle cases with no significant peaks
-		console.print(f"No significant peaks found for {page_type}", style="bright_red")
+        # Find FFT peaks
+        peaks, _ = find_peaks(positive_amplitudes[1:])
+        num_peaks = len(peaks)
+        peak_amplitude = np.max(positive_amplitudes[1:][peaks]) if num_peaks > 0 else None
+        dominant_frequency = (
+            positive_frequencies[peaks[np.argmax(positive_amplitudes[1:][peaks])]] 
+            if num_peaks > 0 else None
+        )
 
-	# Calculate a dynamic cutoff
-	if len(peaks) > 0:
-		peak_amplitude = np.max(positive_amplitudes[1:][peaks])
-		dynamic_cutoff_signal = np.median(tokens_signal) - peak_amplitude
-		dynamic_cutoff_signal = max(dynamic_cutoff_signal, np.percentile(tokens_signal, 10))  # Ensure it's not too low
-	else:
-		dynamic_cutoff_signal = np.percentile(tokens_signal, 10)  # Fallback to 10th percentile if no peaks
+        # Calculate dynamic cutoff
+        dynamic_cutoff_signal = (
+            max(np.median(tokens_signal) - (peak_amplitude or 0), np.percentile(tokens_signal, 10))
+            if num_peaks > 0 else np.percentile(tokens_signal, 10)
+        )
+        dynamic_cutoff_original_scale = max(dynamic_cutoff_signal, min_tokens)
 
+        # Perform relative peak detection
+        prominence = prominence if prominence is not None else np.std(tokens_signal) * 0.1
+        distance = distance if distance is not None else max(1, len(tokens_signal) // 20)
+        relative_peaks, relative_properties = find_peaks(tokens_signal, prominence=prominence, distance=distance)
+        relative_num_peaks = len(relative_peaks)
+        avg_prominence = np.mean(relative_properties["prominences"]) if relative_num_peaks > 0 else None
 
-	# Clamp the dynamic cutoff to be at least the minimum tokens per page
-	dynamic_cutoff_original_scale = max(dynamic_cutoff_signal, min_tokens)
+        # Calculate autocorrelation
+        autocorr = np.correlate(tokens_signal, tokens_signal, mode='full')
+        max_autocorr = np.max(autocorr[len(autocorr)//2:])
 
-	console.print(f"Dominant Frequency: {dominant_frequency} for {page_type}")
-	console.print(f"Dynamic Cutoff (Original Scale): {dynamic_cutoff_original_scale} for {page_type}")
-	console.print(f"Number of peaks: {num_peaks} for {page_type}")
-	console.print(f"Peak Amplitude: {peak_amplitude:.2f} for {page_type}")
+        # Signal envelope
+        upper_envelope = np.max(np.abs(tokens_signal))
+        lower_envelope = -upper_envelope
 
-	return {
-		"representation": page_type,
-		"dominant_frequency": dominant_frequency,
-		"dynamic_cutoff": dynamic_cutoff_original_scale,
-		"num_peaks": len(peaks),
-		"peak_amplitude": peak_amplitude if len(peaks) > 0 else None,
-		"positive_frequencies": positive_frequencies,
-		"positive_amplitudes": positive_amplitudes
-	}
+        # Spectral features
+        spectral_magnitude = np.sum(positive_amplitudes)
+        spectral_centroid = (
+            np.sum(positive_frequencies * positive_amplitudes) / spectral_magnitude 
+            if spectral_magnitude > 0 else None
+        )
+        spectral_bandwidth = (
+            np.sqrt(np.sum((positive_frequencies - spectral_centroid) ** 2 * positive_amplitudes) / spectral_magnitude) 
+            if spectral_centroid else None
+        )
+
+        # Logging (controlled by `verbose`)
+        if verbose:
+            console.print(f"[bright_cyan]Metrics for {use_signal_type}[/bright_cyan]")
+            console.print(f"Dominant Frequency: {dominant_frequency}")
+            console.print(f"Dynamic Cutoff: {dynamic_cutoff_original_scale}")
+            console.print(f"Number of Peaks: {num_peaks}")
+            console.print(f"Peak Amplitude: {peak_amplitude}")
+            console.print(f"Relative Peaks: {relative_num_peaks}")
+            console.print(f"Average Prominence: {avg_prominence}")
+            console.print(f"Max Autocorrelation: {max_autocorr}")
+            console.print(f"Spectral Centroid: {spectral_centroid}")
+            console.print(f"Spectral Bandwidth: {spectral_bandwidth}")
+            console.print(f"Upper Envelope: {upper_envelope}")
+            console.print(f"Lower Envelope: {lower_envelope}")
+            console.print(f"Spectral Magnitude: {spectral_magnitude}")
+
+        return {
+            "signal_type": use_signal_type,
+            "dominant_frequency": dominant_frequency,
+            "dynamic_cutoff": dynamic_cutoff_original_scale,
+            "num_peaks": num_peaks,
+            "peak_amplitude": peak_amplitude,
+            "relative_num_peaks": relative_num_peaks,
+            "avg_prominence": avg_prominence,
+            "max_autocorrelation": max_autocorr,
+            "upper_envelope": upper_envelope,
+            "lower_envelope": lower_envelope,
+            "spectral_centroid": spectral_centroid,
+            "spectral_bandwidth": spectral_bandwidth,
+            "spectral_magnitude": spectral_magnitude,
+			"positive_frequencies": positive_frequencies,
+			"positive_amplitudes": positive_amplitudes,
+        }
+    except Exception as e:
+        console.print(f"[bright_red]Error calculating metrics for {use_signal_type}: {e}[/bright_red]")
+        return {}
 
 def process_tokens(file_path: str, preidentified_periodical: bool, should_filter_greater_than_numbers: bool, should_filter_implied_zeroes: bool) -> tuple:
 	"""
@@ -404,8 +454,8 @@ def plot_volume_frequencies_matplotlib(volume_frequencies: list, periodical_name
 	plt.figure(figsize=(14, 8))
 	for volume in volume_frequencies:
 		plt.plot(
-			volume['raw_tokens_positive_frequencies'], 
-			volume['raw_tokens_positive_amplitudes'], 
+			volume['raw_positive_frequencies'], 
+			volume['raw_positive_amplitudes'], 
 			label=f"Volume {volume['htid']}"
 		)
 	plt.title(f'Frequency Spectra of All Volumes in {periodical_name}')
@@ -533,24 +583,39 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 		wavelet_results_df, best_wavelet_config, combined_wavelet_correlation = compare_and_rank_wavelet_metrics(
 			tokens_standardized_signal, tokens_smoothed_signal, wavelets, modes, weights
 		)
-		representations = {
+		signal_types = {
 			"raw": merged_expanded_df['tokens_per_page'].values,
 			"smoothed": merged_expanded_df['smoothed_tokens_per_page'].values,
 		}
-		# Calculate dominant frequency for each representation
-		dominant_frequency_results = []
-		for rep_name, signal in representations.items():
-			
-			result = calculate_dominant_frequency(
+		# Calculate metrics for each representation
+		signal_metrics_results = []
+		for signal_type, signal in signal_types.items():
+			result = calculate_signal_metrics(
 				tokens_signal=signal,
-				page_type=rep_name,
-				min_tokens=merged_expanded_df['tokens_per_page'].min()
+				use_signal_type=signal_type,
+				min_tokens=merged_expanded_df['tokens_per_page'].min(),
+				prominence=1.0,
+				distance=5,
+				verbose=True
 			)
-			dominant_frequency_results.append(result)
-		dominant_frequency_df = pd.DataFrame(dominant_frequency_results)
+			signal_metrics_results.append(result)
+
+		# Convert to DataFrame for easier analysis
+		signal_metrics_df = pd.DataFrame(signal_metrics_results)
+
+		# Separate raw and smoothed signals
+		raw_signals = signal_metrics_df[signal_metrics_df.signal_type == 'raw'].drop(columns=['signal_type'])
+		smoothed_signals = signal_metrics_df[signal_metrics_df.signal_type == 'smoothed'].drop(columns=['signal_type'])
+
+		# Rename columns to include the signal_type
+		raw_signals.columns = [f"raw_{col}" for col in raw_signals.columns]
+		smoothed_signals.columns = [f"smoothed_{col}" for col in smoothed_signals.columns]
+
+		# Concatenate the DataFrames side by side
+		merged_signals = pd.concat([raw_signals.reset_index(drop=True), smoothed_signals.reset_index(drop=True)], axis=1)
 		
 		if volume['is_annotated_periodical'] and len(grouped_df) > 1:
-			missing_issues, chart = visualize_annotated_periodicals(merged_expanded_df, grouped_df, output_dir, volume['lowercase_periodical_name'], dominant_frequency_df[dominant_frequency_df.representation == 'raw'].dynamic_cutoff.values[0])
+			missing_issues, chart = visualize_annotated_periodicals(merged_expanded_df, grouped_df, output_dir, volume['lowercase_periodical_name'], merged_signals.raw_dynamic_cutoff.values[0])
 			altair_charts.append(chart)
 		else:
 			missing_issues = []
@@ -558,10 +623,10 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 
 		# Use dynamic cutoffs for tokens and digits
 		merged_expanded_df['is_likely_cover_raw'] = (
-			(merged_expanded_df['tokens_per_page'] <= dominant_frequency_df[dominant_frequency_df.representation == 'raw'].dynamic_cutoff.values[0]) 
+			(merged_expanded_df['tokens_per_page'] <= merged_signals.raw_dynamic_cutoff.values[0])
 		)
 		merged_expanded_df['is_likely_cover_smoothed'] = (
-			(merged_expanded_df['smoothed_tokens_per_page'] <= dominant_frequency_df[dominant_frequency_df.representation == 'smoothed'].dynamic_cutoff.values[0])
+			(merged_expanded_df['smoothed_tokens_per_page'] <= merged_signals.smoothed_dynamic_cutoff.values[0])
 		)
 
 		# List pages marked as likely covers
@@ -570,22 +635,11 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 
 		# Convert best_wavelet row to dictionary
 		best_wavelet_dict = best_wavelet_config.iloc[0].to_dict()
+		merged_signals_dict = merged_signals.iloc[0].to_dict()
 
 		# Append frequencies and metadata
 		volume_data = {
 			'wavelet_correlation': combined_wavelet_correlation,
-			'raw_tokens_dominant_frequency': dominant_frequency_df[dominant_frequency_df.representation == 'raw'].dominant_frequency.values[0],
-			'raw_tokens_dynamic_cutoff': dominant_frequency_df[dominant_frequency_df.representation == 'raw'].dynamic_cutoff.values[0],
-			'raw_tokens_num_peaks': dominant_frequency_df[dominant_frequency_df.representation == 'raw'].num_peaks.values[0],
-			'raw_tokens_peak_amplitude': dominant_frequency_df[dominant_frequency_df.representation == 'raw'].peak_amplitude.values[0],
-			'raw_tokens_positive_frequencies': dominant_frequency_df[dominant_frequency_df.representation == 'raw'].positive_frequencies.values[0],
-			'raw_tokens_positive_amplitudes': dominant_frequency_df[dominant_frequency_df.representation == 'raw'].positive_amplitudes.values[0],
-			'smoothed_tokens_dominant_frequency': dominant_frequency_df[dominant_frequency_df.representation == 'smoothed'].dominant_frequency.values[0],
-			'smoothed_tokens_dynamic_cutoff': dominant_frequency_df[dominant_frequency_df.representation == 'smoothed'].dynamic_cutoff.values[0],
-			'smoothed_tokens_num_peaks': dominant_frequency_df[dominant_frequency_df.representation == 'smoothed'].num_peaks.values[0],
-			'smoothed_tokens_peak_amplitude': dominant_frequency_df[dominant_frequency_df.representation == 'smoothed'].peak_amplitude.values[0],
-			'smoothed_tokens_positive_frequencies': dominant_frequency_df[dominant_frequency_df.representation == 'smoothed'].positive_frequencies.values[0],
-			'smoothed_tokens_positive_amplitudes': dominant_frequency_df[dominant_frequency_df.representation == 'smoothed'].positive_amplitudes.values[0],
 			'htid': merged_expanded_df['htid'].unique()[0],
 			'lowercase_periodical_name': volume['lowercase_periodical_name'],
 			'avg_tokens': merged_expanded_df['tokens_per_page'].mean(),
@@ -596,20 +650,26 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 			'total_tokens': merged_expanded_df['tokens_per_page'].sum(),
 			'total_digits': merged_expanded_df['digits_per_page'].sum(),
 			'table_row_index': volume['table_row_index'],
-			'tokens_per_page': merged_expanded_df['tokens_per_page'],
-			'page_numbers': merged_expanded_df['page_number'],
-			'digits_per_page': merged_expanded_df['digits_per_page'],
+			'tokens_per_page': merged_expanded_df['tokens_per_page'].values,
+			'page_numbers': merged_expanded_df['page_number'].values,
+			'digits_per_page': merged_expanded_df['digits_per_page'].values,
 			'missing_issues': missing_issues
 		}
-
+		volume_df = pd.DataFrame([volume_data])
+		volume_df = volume_df.drop(columns=['tokens_per_page', 'page_numbers', 'digits_per_page'])
 		# Merge the best_wavelet_dict with volume_data
 		volume_data.update(best_wavelet_dict)
-
+		volume_data.update(merged_signals_dict)
+		# Append to the list of volume frequencies
 		volume_frequencies.append(volume_data)
-
-		volume_df = pd.DataFrame(volume_frequencies)
+		# Merge the full wavelet results with the signal metrics
+		merged_signal_analysis_df = pd.merge(wavelet_results_df, signal_metrics_df, on='signal_type', how='left')
+		# Drop the positive frequencies and amplitudes
+		merged_signal_analysis_df = merged_signal_analysis_df.drop(columns=['positive_frequencies', 'positive_amplitudes'])
 		# Concat the full wavelet results to the volume data and store as CSV
-		full_wavelet_results = pd.concat([wavelet_results_df, volume_df], ignore_index=True, axis=1)
+		repeated_volume_df = pd.concat([volume_df] * len(merged_signal_analysis_df), ignore_index=True)
+
+		full_wavelet_results = pd.concat([repeated_volume_df, merged_signal_analysis_df], axis=1)
 
 		file_path = volume['file_path'].replace("_individual_tokens.csv", "_wavelet_results.csv")
 		full_wavelet_results.to_csv(file_path, index=False)
@@ -624,8 +684,8 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 		save_chart(combined_charts, f"{output_dir}/annotated_tokens_per_page/{periodical_name}_tokens_per_page_chart.png", scale_factor=2.0)
 
 	# Calculate consensus issue length based on median dominant frequency
-	volume_frequencies_df['raw_consensus_issue_length'] = volume_frequencies_df['raw_tokens_dynamic_cutoff'].median()
-	volume_frequencies_df['smoothed_consensus_issue_length'] = volume_frequencies_df['smoothed_tokens_dynamic_cutoff'].median()
+	volume_frequencies_df['raw_consensus_issue_length'] = volume_frequencies_df['raw_dynamic_cutoff'].median()
+	volume_frequencies_df['smoothed_consensus_issue_length'] = volume_frequencies_df['smoothed_dynamic_cutoff'].median()
 	volume_frequencies_df['raw_consensus_issue_length'] = volume_frequencies_df['raw_consensus_issue_length'].fillna(0)
 	volume_frequencies_df['smoothed_consensus_issue_length'] = volume_frequencies_df['smoothed_consensus_issue_length'].fillna(0)
 
@@ -714,7 +774,7 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 		volume_paths_df = pd.DataFrame(volume_paths)
 		volume_frequencies = generate_volume_embeddings(volume_paths_df, output_dir="../figures", run_correlations=should_run_correlations)
 		# Drop amplitutde and frequency columns for saving file space
-		volume_frequencies = volume_frequencies.drop(columns=['raw_tokens_positive_frequencies', 'raw_tokens_positive_amplitudes', 'smoothed_tokens_positive_frequencies', 'smoothed_tokens_positive_amplitudes'])
+		volume_frequencies = volume_frequencies.drop(columns=['raw_positive_frequencies', 'raw_positive_amplitudes', 'smoothed_positive_frequencies', 'smoothed_positive_amplitudes', 'tokens_per_page', 'page_numbers', 'digits_per_page'])
 		# Save volume frequencies to CSV
 		if os.path.exists(volume_features_output_path):
 			volume_frequencies.to_csv(volume_features_output_path, mode='a', index=False, header=False)
