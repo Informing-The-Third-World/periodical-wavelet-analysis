@@ -143,6 +143,8 @@ def determine_best_wavelet_representation(results_df: pd.DataFrame, weights: dic
 		The row containing the best wavelet, level, and mode.
 	ranked_results : pd.DataFrame
 		DataFrame with combined scores and rankings.
+	correlation_norm_zscore : float
+		Correlation between normalized and zscored combined scores. Useful for checking consistency and identifying outliers.
 	"""
 	# Default weights if none provided
 	if weights is None:
@@ -162,20 +164,31 @@ def determine_best_wavelet_representation(results_df: pd.DataFrame, weights: dic
 	)
 	normalized_df[f'{prefix}wavelet_mse_norm'] = 1 - normalized_df[f'{prefix}wavelet_mse_norm']  # Lower MSE is better
 
-	# Compute Combined Score
-	normalized_df[f'{prefix}wavelet_combined_score'] = (
+	# Zscore normalization
+	normalized_df[[f'{prefix}wavelet_mse_zscore',  f'{prefix}wavelet_energy_entropy_zscore',  f'{prefix}wavelet_sparsity_zscore']] = (
+		(normalized_df[['wavelet_mse', 'wavelet_energy_entropy', 'wavelet_sparsity']] - normalized_df[['wavelet_mse', 'wavelet_energy_entropy', 'wavelet_sparsity']].mean()) /normalized_df[['wavelet_mse', 'wavelet_energy_entropy', 'wavelet_sparsity']].std()
+	)
+	# Compute Combined ZScore
+	normalized_df[f'{prefix}wavelet_zscore_combined_score'] = (
+		weights['wavelet_mse'] * normalized_df[f'{prefix}wavelet_mse_zscore'] +
+		weights['wavelet_energy_entropy'] * normalized_df[f'{prefix}wavelet_energy_entropy_zscore'] +
+		weights['wavelet_sparsity'] * normalized_df[f'{prefix}wavelet_sparsity_zscore']
+	)
+	# Compute Combined Normalized Score
+	normalized_df[f'{prefix}wavelet_norm_combined_score'] = (
 		weights['wavelet_mse'] * normalized_df[f'{prefix}wavelet_mse_norm'] +
 		weights['wavelet_energy_entropy'] * normalized_df[f'{prefix}wavelet_energy_entropy_norm'] +
 		weights['wavelet_sparsity'] * normalized_df[f'{prefix}wavelet_sparsity_norm']
 	)
 
 	# Rank results
-	ranked_results_df = normalized_df.sort_values(by=f'{prefix}wavelet_combined_score', ascending=False).reset_index(drop=True)
+	ranked_results_df = normalized_df.sort_values(by=[f'{prefix}wavelet_norm_combined_score', f'{prefix}wavelet_zscore_combined_score'], ascending=False).reset_index(drop=True)
 	ranked_results_df[f'{prefix}wavelet_rank'] = ranked_results_df.index + 1
 
 	# Return the best configuration and the ranked results
 	best_config = ranked_results_df[0:1]
-	return best_config, ranked_results_df
+	correlation_norm_zscore = ranked_results_df[['combined_wavelet_norm_combined_score', 'combined_wavelet_zscore_combined_score']].corr().iloc[0, 1]
+	return best_config, ranked_results_df, correlation_norm_zscore
 
 def compare_and_rank_wavelet_metrics(raw_signal: np.ndarray, smoothed_signal: np.ndarray, wavelets: list, modes: list, weights: dict) -> tuple:
 	"""
@@ -208,23 +221,23 @@ def compare_and_rank_wavelet_metrics(raw_signal: np.ndarray, smoothed_signal: np
 	smoothed_results = evaluate_wavelet_performance(smoothed_signal, wavelets, modes, signal_type='smoothed')
 
 	# Determine best representations for each signal type
-	best_raw, ranked_raw = determine_best_wavelet_representation(raw_results, weights)
-	best_smoothed, ranked_smoothed = determine_best_wavelet_representation(smoothed_results, weights)
+	best_raw, ranked_raw, raw_correlation = determine_best_wavelet_representation(raw_results, weights)
+	best_smoothed, ranked_smoothed, smoothed_correlation = determine_best_wavelet_representation(smoothed_results, weights)
 
 	# Combine results
 	combined_results = pd.concat([ranked_raw, ranked_smoothed], ignore_index=True)
 
 	# Determine best combined representation
-	best_combined_results, finalized_combined_results = determine_best_wavelet_representation(combined_results, weights, is_combined=True)
+	best_combined_results, finalized_combined_results, combined_correlation = determine_best_wavelet_representation(combined_results, weights, is_combined=True)
 
 	# Display results
-	generate_table(best_raw, "Best Wavelet Configuration for Raw Tokens")
-	generate_table(best_smoothed, "Best Wavelet Configuration for Smoothed Tokens")
-	generate_table(best_combined_results, "Best Combined Wavelet Configuration")
+	generate_table(best_raw, f"Best Wavelet Configuration for Raw Tokens with Correlation: {raw_correlation:.2f}")
+	generate_table(best_smoothed, f"Best Wavelet Configuration for Smoothed Tokens with Correlation: {smoothed_correlation:.2f}")
+	generate_table(best_combined_results, f"Best Combined Wavelet Configuration with Correlation: {combined_correlation:.2f}")
 
-	return finalized_combined_results, best_combined_results
+	return finalized_combined_results, best_combined_results, combined_correlation
 
-def calculate_dominant_frequency(tokens_signal: np.ndarray, tokens_mean: float, tokens_std: float, page_type: str, min_tokens: float) -> tuple:
+def calculate_dominant_frequency(tokens_signal: np.ndarray, page_type: str, min_tokens: float) -> dict:
 	"""
 	Calculate the dominant frequency of the given signal and a dynamic cutoff.
 
@@ -232,22 +245,21 @@ def calculate_dominant_frequency(tokens_signal: np.ndarray, tokens_mean: float, 
 	----------
 	tokens_signal : np.ndarray
 		The tokens signal to be analyzed.
-	tokens_mean : float
-		Mean of the original tokens per page.
-	tokens_std : float
-		Standard deviation of the original tokens per page.
 	page_type : str
-		The type of page being analyzed (e.g., "tokens_per_page").
+		The type of page being analyzed (e.g., raw or smoothed "tokens_per_page").
 	min_tokens : float
 		The minimum observed tokens per page in the original scale.
 
 	Returns
 	-------
-	tuple
+	dict
+		- representation: The type of page being analyzed.
 		- dominant_frequency: The dominant frequency of the signal.
-		- positive_frequencies: Array of positive frequencies.
-		- positive_amplitudes: Array of positive amplitudes.
-		- dynamic_cutoff_original_scale: Dynamic cutoff in the original scale.
+		- dynamic_cutoff: The dynamic cutoff in the original scale.
+		- num_peaks: The number of significant peaks in the signal.
+		- peak_amplitude: The amplitude of the dominant peak.
+		- positive_frequencies: The positive frequencies.
+		- positive_amplitudes: The positive amplitudes.
 	"""
 	# Perform FFT
 	tokens_fft = fft(tokens_signal)
@@ -259,6 +271,8 @@ def calculate_dominant_frequency(tokens_signal: np.ndarray, tokens_mean: float, 
 
 	# Find the dominant frequency (ignoring the DC component)
 	peaks, _ = find_peaks(positive_amplitudes[1:])
+	peak_amplitude = np.max(positive_amplitudes[1:][peaks]) if len(peaks) > 0 else 0
+	num_peaks = len(peaks)
 	if len(peaks) > 0:
 		dominant_frequency_index = peaks[np.argmax(positive_amplitudes[1:][peaks])] + 1
 		dominant_frequency = positive_frequencies[dominant_frequency_index]
@@ -274,16 +288,24 @@ def calculate_dominant_frequency(tokens_signal: np.ndarray, tokens_mean: float, 
 	else:
 		dynamic_cutoff_signal = np.percentile(tokens_signal, 10)  # Fallback to 10th percentile if no peaks
 
-	# Convert the dynamic cutoff back to the original scale
-	dynamic_cutoff_original_scale = (dynamic_cutoff_signal * tokens_std) + tokens_mean
 
 	# Clamp the dynamic cutoff to be at least the minimum tokens per page
-	dynamic_cutoff_original_scale = max(dynamic_cutoff_original_scale, min_tokens)
+	dynamic_cutoff_original_scale = max(dynamic_cutoff_signal, min_tokens)
 
 	console.print(f"Dominant Frequency: {dominant_frequency} for {page_type}")
 	console.print(f"Dynamic Cutoff (Original Scale): {dynamic_cutoff_original_scale} for {page_type}")
+	console.print(f"Number of peaks: {num_peaks} for {page_type}")
+	console.print(f"Peak Amplitude: {peak_amplitude:.2f} for {page_type}")
 
-	return dominant_frequency, positive_frequencies, positive_amplitudes, dynamic_cutoff_original_scale
+	return {
+		"representation": page_type,
+		"dominant_frequency": dominant_frequency,
+		"dynamic_cutoff": dynamic_cutoff_original_scale,
+		"num_peaks": len(peaks),
+		"peak_amplitude": peak_amplitude if len(peaks) > 0 else None,
+		"positive_frequencies": positive_frequencies,
+		"positive_amplitudes": positive_amplitudes
+	}
 
 def process_tokens(file_path: str, preidentified_periodical: bool, should_filter_greater_than_numbers: bool, should_filter_implied_zeroes: bool) -> tuple:
 	"""
@@ -368,7 +390,7 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 
 def plot_volume_frequencies_matplotlib(volume_frequencies: list, periodical_name: str, output_dir: str):
 	"""
-	Plot all volume frequencies on the same graph and save as an image.
+	Plot all volume frequencies on the same graph and save as an image. Hard coded to use raw tokens positive frequencies and amplitudes but can be modified.
 
 	Parameters:
 	- volume_frequencies: List of volume frequency data.
@@ -378,8 +400,8 @@ def plot_volume_frequencies_matplotlib(volume_frequencies: list, periodical_name
 	plt.figure(figsize=(14, 8))
 	for volume in volume_frequencies:
 		plt.plot(
-			volume['tokens_positive_frequencies'], 
-			volume['tokens_positive_amplitudes'], 
+			volume['raw_tokens_positive_frequencies'], 
+			volume['raw_tokens_positive_amplitudes'], 
 			label=f"Volume {volume['htid']}"
 		)
 	plt.title(f'Frequency Spectra of All Volumes in {periodical_name}')
@@ -504,43 +526,68 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 		wavelets = ['db4', 'haar', 'sym4', 'coif5', 'bior2.2']  # Wavelet families to test
 		modes = ['symmetric', 'periodization', 'constant']      # Signal extension modes
 		weights = {'wavelet_mse': 0.5, 'wavelet_energy_entropy': 0.3, 'wavelet_sparsity': 0.2}  # Weights for metrics
-		wavelet_results_df, best_wavelet_config = compare_and_rank_wavelet_metrics(
+		wavelet_results_df, best_wavelet_config, combined_wavelet_correlation = compare_and_rank_wavelet_metrics(
 			tokens_standardized_signal, tokens_smoothed_signal, wavelets, modes, weights
 		)
-
-		# Calculate dominant frequencies for tokens and digits
-		tokens_dominant_frequency, tokens_positive_frequencies, tokens_positive_amplitudes, tokens_dynamic_cutoff = calculate_dominant_frequency(
-			tokens_standardized_signal, tokens_mean, tokens_std, "tokens_per_page",  merged_expanded_df['tokens_per_page'].min()
-		)
+		representations = {
+			"raw": merged_expanded_df['tokens_per_page'].values,
+			"smoothed": merged_expanded_df['smoothed_tokens_per_page'].values,
+		}
+		# Calculate dominant frequency for each representation
+		dominant_frequency_results = []
+		for rep_name, signal in representations.items():
+			
+			result = calculate_dominant_frequency(
+				tokens_signal=signal,
+				page_type=rep_name,
+				min_tokens=merged_expanded_df['tokens_per_page'].min()
+			)
+			dominant_frequency_results.append(result)
+		dominant_frequency_df = pd.DataFrame(dominant_frequency_results)
 		
 		if volume['is_annotated_periodical'] and len(grouped_df) > 1:
-			missing_issues, chart = visualize_annotated_periodicals(merged_expanded_df, grouped_df, output_dir, volume['lowercase_periodical_name'], tokens_dynamic_cutoff)
+			missing_issues, chart = visualize_annotated_periodicals(merged_expanded_df, grouped_df, output_dir, volume['lowercase_periodical_name'], dominant_frequency_df[dominant_frequency_df.representation == 'raw'].dynamic_cutoff.values[0])
 			altair_charts.append(chart)
 		else:
 			missing_issues = []
 			chart = None
 
 		# Use dynamic cutoffs for tokens and digits
-		merged_expanded_df['is_likely_cover'] = (
-			(merged_expanded_df['tokens_per_page'] <= tokens_dynamic_cutoff) 
+		merged_expanded_df['is_likely_cover_raw'] = (
+			(merged_expanded_df['tokens_per_page'] <= dominant_frequency_df[dominant_frequency_df.representation == 'raw'].dynamic_cutoff.values[0]) 
+		)
+		merged_expanded_df['is_likely_cover_smoothed'] = (
+			(merged_expanded_df['smoothed_tokens_per_page'] <= dominant_frequency_df[dominant_frequency_df.representation == 'smoothed'].dynamic_cutoff.values[0])
 		)
 
 		# List pages marked as likely covers
-		list_of_covers = merged_expanded_df[merged_expanded_df['is_likely_cover']].page_number.unique().tolist()
+		raw_list_of_covers = merged_expanded_df[merged_expanded_df['is_likely_cover_raw']].page_number.unique().tolist()
+		smoothed_list_of_covers = merged_expanded_df[merged_expanded_df['is_likely_cover_smoothed']].page_number.unique().tolist()
 
 		# Convert best_wavelet row to dictionary
 		best_wavelet_dict = best_wavelet_config.iloc[0].to_dict()
 
 		# Append frequencies and metadata
 		volume_data = {
-			'tokens_dominant_frequency': tokens_dominant_frequency,
-			'tokens_positive_frequencies': tokens_positive_frequencies,
-			'tokens_positive_amplitudes': tokens_positive_amplitudes,
+			'wavelet_correlation': combined_wavelet_correlation,
+			'raw_tokens_dominant_frequency': dominant_frequency_df[dominant_frequency_df.representation == 'raw'].dominant_frequency.values[0],
+			'raw_tokens_dynamic_cutoff': dominant_frequency_df[dominant_frequency_df.representation == 'raw'].dynamic_cutoff.values[0],
+			'raw_tokens_num_peaks': dominant_frequency_df[dominant_frequency_df.representation == 'raw'].num_peaks.values[0],
+			'raw_tokens_peak_amplitude': dominant_frequency_df[dominant_frequency_df.representation == 'raw'].peak_amplitude.values[0],
+			'raw_tokens_positive_frequencies': dominant_frequency_df[dominant_frequency_df.representation == 'raw'].positive_frequencies.values[0],
+			'raw_tokens_positive_amplitudes': dominant_frequency_df[dominant_frequency_df.representation == 'raw'].positive_amplitudes.values[0],
+			'smoothed_tokens_dominant_frequency': dominant_frequency_df[dominant_frequency_df.representation == 'smoothed'].dominant_frequency.values[0],
+			'smoothed_tokens_dynamic_cutoff': dominant_frequency_df[dominant_frequency_df.representation == 'smoothed'].dynamic_cutoff.values[0],
+			'smoothed_tokens_num_peaks': dominant_frequency_df[dominant_frequency_df.representation == 'smoothed'].num_peaks.values[0],
+			'smoothed_tokens_peak_amplitude': dominant_frequency_df[dominant_frequency_df.representation == 'smoothed'].peak_amplitude.values[0],
+			'smoothed_tokens_positive_frequencies': dominant_frequency_df[dominant_frequency_df.representation == 'smoothed'].positive_frequencies.values[0],
+			'smoothed_tokens_positive_amplitudes': dominant_frequency_df[dominant_frequency_df.representation == 'smoothed'].positive_amplitudes.values[0],
 			'htid': merged_expanded_df['htid'].unique()[0],
 			'lowercase_periodical_name': volume['lowercase_periodical_name'],
 			'avg_tokens': merged_expanded_df['tokens_per_page'].mean(),
 			'avg_digits': merged_expanded_df['digits_per_page'].mean(),
-			'likely_covers': list_of_covers,
+			'raw_likely_covers': raw_list_of_covers,
+			'smoothed_likely_covers': smoothed_list_of_covers,
 			'total_pages': merged_expanded_df['page_number'].nunique(),
 			'total_tokens': merged_expanded_df['tokens_per_page'].sum(),
 			'total_digits': merged_expanded_df['digits_per_page'].sum(),
@@ -548,7 +595,6 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 			'tokens_per_page': merged_expanded_df['tokens_per_page'],
 			'page_numbers': merged_expanded_df['page_number'],
 			'digits_per_page': merged_expanded_df['digits_per_page'],
-			'tokens_dynamic_cutoff': tokens_dynamic_cutoff,
 			'missing_issues': missing_issues
 		}
 
@@ -560,6 +606,7 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 		volume_df = pd.DataFrame(volume_frequencies)
 		# Concat the full wavelet results to the volume data and store as CSV
 		full_wavelet_results = pd.concat([wavelet_results_df, volume_df], ignore_index=True, axis=1)
+
 		file_path = volume['file_path'].replace("_individual_tokens.csv", "_wavelet_results.csv")
 		full_wavelet_results.to_csv(file_path, index=False)
 
@@ -571,46 +618,12 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 		combined_charts = alt.vconcat(*altair_charts)
 		# Save the chart
 		save_chart(combined_charts, f"{output_dir}/annotated_tokens_per_page/{periodical_name}_tokens_per_page_chart.png", scale_factor=2.0)
-	# Sequential correlation analysis (optional)
-	if run_correlations:
-		sequential_correlations = []
-		for i in range(len(volume_frequencies) - 1):
-			vol1 = volume_frequencies[i]
-			vol2 = volume_frequencies[i + 1]
-			
-			# Interpolate or truncate amplitudes to match lengths if necessary
-			min_length = min(len(vol1['tokens_positive_amplitudes']), len(vol2['tokens_positive_amplitudes']))
-			corr, _ = pearsonr(
-				vol1['tokens_positive_amplitudes'][:min_length], 
-				vol2['tokens_positive_amplitudes'][:min_length]
-			)
-			sequential_correlations.append({
-				'volume1': vol1['htid'], 
-				'volume2': vol2['htid'], 
-				'correlation': corr,
-				'periodical_name': vol1['lowercase_periodical_name']
-			})
-
-		# Save sequential correlations as CSV
-		sequential_corr_df = pd.DataFrame(sequential_correlations)
-		sequential_corr_df.to_csv(f"{output_dir}/sequential_correlations.csv", index=False)
-
-		# Plot frequency spectra for each volume
-		for volume in volume_frequencies:
-			plt.figure(figsize=(12, 6))
-			plt.plot(volume['tokens_positive_frequencies'], volume['tokens_positive_amplitudes'], label='Tokens')
-			plt.plot(volume['digits_positive_frequencies'], volume['digits_positive_amplitudes'], label='Digits')
-			plt.title(f"Frequency Spectra - {volume['periodical_name']} (Volume {volume['volume_id']})")
-			plt.xlabel('Frequency')
-			plt.ylabel('Amplitude')
-			plt.legend()
-			volume_plot_path = f"{output_dir}/frequency_spectra_{volume['volume_id']}.png"
-			plt.savefig(volume_plot_path)
-			plt.close()  # Close the plot to save memory
 
 	# Calculate consensus issue length based on median dominant frequency
-	volume_frequencies_df['consensus_issue_length'] = volume_frequencies_df['tokens_dynamic_cutoff'].median()
-	volume_frequencies_df['consensus_issue_length'] = volume_frequencies_df['consensus_issue_length'].fillna(0)
+	volume_frequencies_df['raw_consensus_issue_length'] = volume_frequencies_df['raw_tokens_dynamic_cutoff'].median()
+	volume_frequencies_df['smoothed_consensus_issue_length'] = volume_frequencies_df['smoothed_tokens_dynamic_cutoff'].median()
+	volume_frequencies_df['raw_consensus_issue_length'] = volume_frequencies_df['raw_consensus_issue_length'].fillna(0)
+	volume_frequencies_df['smoothed_consensus_issue_length'] = volume_frequencies_df['smoothed_consensus_issue_length'].fillna(0)
 
 	plot_volume_frequencies_matplotlib(volume_frequencies, periodical_name, output_dir)
 	plot_tokens_per_page(volume_frequencies, output_dir, periodical_name)
