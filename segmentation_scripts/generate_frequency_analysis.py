@@ -436,11 +436,8 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 	# Normalize signals for FFT and autocorrelation
 	tokens_standardized_signal = merged_expanded_df['standardized_tokens_per_page'].values
 	tokens_smoothed_signal = merged_expanded_df['standardized_digits_per_page'].values
-
-	tokens_mean = merged_expanded_df['tokens_per_page'].mean()
-	tokens_std = merged_expanded_df['tokens_per_page'].std()
 	
-	return merged_expanded_df, grouped_df, tokens_standardized_signal, tokens_smoothed_signal, tokens_mean, tokens_std
+	return merged_expanded_df, grouped_df, tokens_standardized_signal, tokens_smoothed_signal
 
 def plot_volume_frequencies_matplotlib(volume_frequencies: list, periodical_name: str, output_dir: str):
 	"""
@@ -570,7 +567,7 @@ def generate_volume_embeddings(volume_paths_df: pd.DataFrame, output_dir: str, r
 	periodical_name = volume_paths_df['lowercase_periodical_name'].unique()[0]
 	altair_charts = []
 	for _, volume in volume_paths_df.iterrows():
-		merged_expanded_df, grouped_df, tokens_standardized_signal, tokens_smoothed_signal, tokens_mean, tokens_std = process_tokens(
+		merged_expanded_df, grouped_df, tokens_standardized_signal, tokens_smoothed_signal = process_tokens(
 			volume['file_path'], 
 			volume['is_annotated_periodical'], 
 			volume['should_filter_greater_than_numbers'], 
@@ -721,6 +718,8 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 		volume_features_df = pd.DataFrame()
 
 	data_directory_path = get_data_directory_path()
+	console.print(f"Reading preidentified periodicals from {data_directory_path}..", style="bright_blue")
+	
 	preidentified_periodicals_df = read_csv_file(os.path.join(data_directory_path, "HathiTrust-pcc-datasets", "datasets", "periodical_metadata", "preidentified_periodicals_with_full_metadata.csv"))
 	periodical_titles = preidentified_periodicals_df['lowercase_periodical_name'].unique()
 
