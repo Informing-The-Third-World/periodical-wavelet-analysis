@@ -1,6 +1,64 @@
-# Token Frequency Analysis Logic & Notes
+# Token Frequency & Signal Processing Analysis Notes
 
-The goal of this document is to outline the logic and methods for analyzing token frequency data extracted from OCR text. The analysis aims to identify patterns, trends, and anomalies in the distribution of tokens across pages, volumes, or periodicals. By examining the frequency characteristics of the data, we can gain insights into the underlying structures, layouts, and content variations within the digitized documents.
+This document outlines the methodology, logic, and key considerations for analyzing token frequency data extracted from OCR text as a signal, enabling the use of signal processing techniques to extract meaningful patterns. The ultimate goal is to improve issue segmentation and periodical classification within the HathiTrust corpus by identifying trends and anomalies across pages, volumes, or periodicals.
+
+This analysis heavily utilizes wavelet transforms and related signal processing techniques for multi-scale analysis. The majority of the code is currently in the [`generate_frequency_analysis.py` script](../segmentation_scripts/generate_token_frequency_signal_processing_analysis.py).
+
+## PYWT & Wavelet Analysis
+
+In the context of token frequency analysis, we use wavelet transforms to decompose the signal into its constituent wavelets. This allows us to analyze the signal at multiple scales and extract meaningful features for further analysis. We rely heavily on the `pywt` library for this analysis, which provides a range of wavelet families and modes for analysis. In fact, we use both dynamic and continuous wavelet transforms, as well as all families and signal extension modes (`zero`, `constant`, `symmetric`, `periodic`, `smooth`, `periodization`, `reflect`, `antisymmetric`, `antireflect`).
+
+We use the multilevel discrete wavelet transform (DWT) and continuous wavelet transform (CWT) to analyze the signal at different scales and resolutions. We could use the single DWT but we use the multilevel DWT to capture more detailed information about the signal at different scales. The CWT is also useful for analyzing the signal at different scales and resolutions, but it is computationally more expensive than the DWT.
+
+### Full List of Wavelets
+
+| Wavelet Transform   | Family Name                        | Short Name   | Wavelets                                                                                                                                                                                                                  |
+|:--------------------|:-----------------------------------|:-------------|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Discrete (DWT)      | Haar                               | haar         | haar                                                                                                                                                                                                                      |
+| Discrete (DWT)      | Daubechies                         | db           | db1, db2, db3, db4, db5, db6, db7, db8, db9, db10, db11, db12, db13, db14, db15, db16, db17, db18, db19, db20, db21, db22, db23, db24, db25, db26, db27, db28, db29, db30, db31, db32, db33, db34, db35, db36, db37, db38 |
+| Discrete (DWT)      | Symlets                            | sym          | sym2, sym3, sym4, sym5, sym6, sym7, sym8, sym9, sym10, sym11, sym12, sym13, sym14, sym15, sym16, sym17, sym18, sym19, sym20                                                                                               |
+| Discrete (DWT)      | Coiflets                           | coif         | coif1, coif2, coif3, coif4, coif5, coif6, coif7, coif8, coif9, coif10, coif11, coif12, coif13, coif14, coif15, coif16, coif17                                                                                             |
+| Discrete (DWT)      | Biorthogonal                       | bior         | bior1.1, bior1.3, bior1.5, bior2.2, bior2.4, bior2.6, bior2.8, bior3.1, bior3.3, bior3.5, bior3.7, bior3.9, bior4.4, bior5.5, bior6.8                                                                                     |
+| Discrete (DWT)      | Reverse biorthogonal               | rbio         | rbio1.1, rbio1.3, rbio1.5, rbio2.2, rbio2.4, rbio2.6, rbio2.8, rbio3.1, rbio3.3, rbio3.5, rbio3.7, rbio3.9, rbio4.4, rbio5.5, rbio6.8                                                                                     |
+| Discrete (DWT)      | Discrete Meyer (FIR Approximation) | dmey         | dmey                                                                                                                                                                                                                      |
+| Continuous (CWT)    | Gaussian                           | gaus         | gaus1, gaus2, gaus3, gaus4, gaus5, gaus6, gaus7, gaus8                                                                                                                                                                    |
+| Continuous (CWT)    | Mexican hat wavelet                | mexh         | mexh                                                                                                                                                                                                                      |
+| Continuous (CWT)    | Morlet wavelet                     | morl         | morl                                                                                                                                                                                                                      |
+| Continuous (CWT)    | Complex Gaussian wavelets          | cgau         | cgau1, cgau2, cgau3, cgau4, cgau5, cgau6, cgau7, cgau8                                                                                                                                                                    |
+| Continuous (CWT)    | Shannon wavelets                   | shan         | shan                                                                                                                                                                                                                      |
+| Continuous (CWT)    | Frequency B-Spline wavelets        | fbsp         | fbsp                                                                                                                                                                                                                      |
+| Continuous (CWT)    | Complex Morlet wavelets            | cmor         | cmor                                                                                                                                                                                                                      |
+
+#### CWT Families
+
+![cwt families](https://pywavelets.readthedocs.io/en/latest/_images/plot_wavelets.png)
+
+#### Modes
+
+![pywt modes](https://pywavelets.readthedocs.io/en/latest/_images/plot_boundary_modes.png)
+
+In the script, this logic is primarily handled by the following functions:
+
+- `energy_entropy_ratio`: this function calculates the energy entropy ratio of the wavelet coefficients, and specifically how the energy of the wavelet coefficients is distributed. High values indicate concentrated energy, suggesting a strong underlying pattern, whereas low values indicate more dispersed energy, suggesting a more complex or noisy signal.
+- `sparsity_measure`: this function calculates the sparsity measure of the wavelet coefficients, which quantifies how concentrated or dense the energy is in a few wavelet coefficients. A higher sparsity measure indicates a simpler signal with fewer significant components, while a lower sparsity measure indicates a more complex signal with many significant components. 
+
+We calls these from either the `evaluate_dwt_performance` or `evaluate_cwt_performance` functions, which iterate over the wavelet families, levels, and modes to evaluate their performance on the token frequency data. In these functions, we also calculate the mean squared error (MSE) of the wavelet coefficients, which quantifies the difference between the original signal and its reconstruction from the wavelet coefficients. A lower MSE indicates a better fit between the original signal and its wavelet representation. For DWT wavelets, we calculate the MSE using numpy's `np.mean(np.square(original_signal - reconstructed_signal))` to calculate the MSE.
+
+For CWT wavelets, we cannot calculate MSE directly, so we instead use the `energy_entropy_ratio` and `sparsity_measure` metrics to evaluate their performance. We also need to pass in `scales` for CWT wavelets. In a CWT, you analyze a signal by “scaling” a wavelet function and shifting it along the signal. The scales array defines the range of scales (frequencies) at which the wavelet transform will analyze the signal. Scales determine how the wavelet is stretched or compressed during the transformation. Smaller scales correspond to higher-frequency components of the signal (fine details). Larger scales correspond to lower-frequency components (coarser, broader patterns). We currently hardcoded the scales to be `np.arange(1, 128)` for CWT wavelets, but this can be adjusted based on the specific signal and analysis requirements.
+
+> **Note:** Not every wavelet works for our signal, so we write any errors to a log file for later review (more on file structure below).
+
+## Processing Tokens
+
+In the script, we have a `process_tokens` function that gets called from the `generate_volume_embeddings` function. This function first calls `process_file` from the `utils.py` file, which reads in the initial extracted features from HathiTrust, expands the token frequencies, creates dummy page numbers since we have some volumes with gaps in page numbers, and then calculates the number of tokens per page.
+
+> Note: **We are completely agnostic to what constitutes a token or whether certain tokens are included.** This means that we are heavily reliant on the underlying OCR processes and the quality of the OCR output.
+
+It is this `tokens_per_page` that is our core signal for analysis. In the `process_tokens` function, we calculate both smoothed and standardized token frequencies. Smoothed tokens are calculated using a moving average with a specified window size, while standardized tokens are calculated using z-score normalization. We primarily use the raw and smoothed tokens as input data for the analysis, depending on the specific method and analysis being performed. We also ensure that there is no null or negative values in the token frequencies, as these can cause issues with the analysis.
+
+## Comparing & Ranking Wavelets
+
+To compare and rank wavelets, we have the `compare_and_rank_wavelet_metrics` function, which evaluates each signal type (so `raw` or `smoothed`) and then their performance across wavelet types (so `DWT` or `CWT`), using metrics such as mean squared error (MSE), sparsity measure, and energy-to-entropy ratio. These metrics help us assess how well each wavelet captures the underlying patterns in the token frequency data.
 
 We primarily use **smoothed** or **standardized** token frequencies as input data for the analysis:
 
