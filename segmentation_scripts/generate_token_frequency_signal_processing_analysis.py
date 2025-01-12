@@ -135,27 +135,27 @@ def check_if_actual_issue(row, grouped_df):
 ## WAVELET RANKING AND COMPARISON FUNCTIONS
 
 def filter_wavelets(wavelets: list, exclude_complex: bool = True) -> list:
-    """
-    Filter out complex-valued wavelets if needed.
+	"""
+	Filter out complex-valued wavelets if needed.
 
-    Parameters:
-    -----------
-    wavelets : list
-        List of wavelet names to test.
-    exclude_complex : bool
-        Whether to exclude complex-valued wavelets.
+	Parameters:
+	-----------
+	wavelets : list
+		List of wavelet names to test.
+	exclude_complex : bool
+		Whether to exclude complex-valued wavelets.
 
-    Returns:
-    --------
-    filtered_wavelets : list
-        List of filtered wavelets.
-    """
-    complex_wavelets = ['cgau1', 'cgau2', 'cgau3', 'cgau4', 'cgau5', 'cgau6', 'cgau7']
-    if exclude_complex:
-        filtered_wavelets = [w for w in wavelets if w not in complex_wavelets]
-        console.print(f"[yellow]Excluding complex-valued wavelets: {complex_wavelets}[/yellow]")
-        return filtered_wavelets
-    return wavelets
+	Returns:
+	--------
+	filtered_wavelets : list
+		List of filtered wavelets.
+	"""
+	complex_wavelets = ['cgau1', 'cgau2', 'cgau3', 'cgau4', 'cgau5', 'cgau6', 'cgau7']
+	if exclude_complex:
+		filtered_wavelets = [w for w in wavelets if w not in complex_wavelets]
+		console.print(f"[yellow]Excluding complex-valued wavelets: {complex_wavelets}[/yellow]")
+		return filtered_wavelets
+	return wavelets
 
 def determine_best_wavelet_representation(
 	results_df: pd.DataFrame, signal_type: str, weights: dict = None, is_combined: bool = False
@@ -180,6 +180,8 @@ def determine_best_wavelet_representation(
 		The row containing the best wavelet configuration.
 	ranked_results : pd.DataFrame
 		DataFrame with combined scores and rankings.
+	subset_ranked_results : pd.DataFrame
+		DataFrame with combined scores and rankings for top configurations by wavelet, signal type, and wavelet type.
 	correlation_norm_zscore : float
 		Correlation between normalized and z-scored combined scores.
 	"""
@@ -197,6 +199,8 @@ def determine_best_wavelet_representation(
 			'correlation': 0.1,
 			'avg_variance_across_levels': 0.1,
 			'variance_ratio_across_levels': 0.1,
+			'emd_value': 0.2,
+			'kl_divergence': 0.2,
 		}
 
 	# Adjust weights based on specific metrics (e.g., SWT and CWT)
@@ -226,18 +230,31 @@ def determine_best_wavelet_representation(
 	scaler = MinMaxScaler()
 	prefix = 'combined_' if is_combined else ''
 
-	try:
-		normalized_df[[f"{prefix}{metric}_norm" for metric in metrics]] = scaler.fit_transform(results_df[metrics])
-	except ValueError as e:
-		console.print(f"[bright_red]Error during normalization: {e}. Dropping invalid rows.[/bright_red]")
-		results_df = results_df.replace([np.inf, -np.inf], np.nan).dropna(subset=metrics).reset_index(drop=True)
-		normalized_df = results_df.copy()
-		normalized_df[[f"{prefix}{metric}_norm" for metric in metrics]] = scaler.fit_transform(results_df[metrics])
+	for metric in metrics:
+		try:
+			normalized_df[f"{prefix}{metric}_norm"] = scaler.fit_transform(results_df[[metric]])
+		except ValueError as e:
+			console.print(f"[bright_red]Error normalizing '{metric}': {e}. Skipping this metric.[/bright_red]")
+			metrics.remove(metric)
 
-	# Invert MSE since lower values are better
+
+	# Invert metrics where lower is better
 	if 'wavelet_mse' in metrics:
 		normalized_df[f"{prefix}wavelet_mse_norm"] = 1 - normalized_df[f"{prefix}wavelet_mse_norm"]
+	if 'wavelet_entropy' in metrics:
+		normalized_df[f"{prefix}wavelet_entropy_norm"] = 1 - normalized_df[f"{prefix}wavelet_entropy_norm"]
+	if 'variance_ratio_across_levels' in metrics:
+		normalized_df[f"{prefix}variance_ratio_across_levels_norm"] = 1 - normalized_df[f"{prefix}variance_ratio_across_levels_norm"]
+	if 'emd_value' in metrics:
+		normalized_df[f"{prefix}emd_value_norm"] = 1 - normalized_df[f"{prefix}emd_value_norm"]
+	if 'kl_divergence' in metrics:
+		normalized_df[f"{prefix}kl_divergence_norm"] = 1 - normalized_df[f"{prefix}kl_divergence_norm"]
 
+	if is_combined:
+		normalized_df['missing_metrics_count'] = normalized_df.apply(
+			lambda row: sum(1 for metric in metrics if pd.isna(row[metric])),
+			axis=1
+		)
 	# Compute z-scores
 	normalized_df[[f"{prefix}{metric}_zscore" for metric in metrics]] = (
 		normalized_df[[f"{prefix}{metric}_norm" for metric in metrics]] - 
@@ -255,17 +272,39 @@ def determine_best_wavelet_representation(
 		axis=1
 	)
 
-	normalized_df[f"{prefix}correlation_norm_score"] = normalized_df[f'{prefix}wavelet_norm_score'].corr(normalized_df[f'{prefix}wavelet_zscore_score'])
+	normalized_df[f"{prefix}normalized_diff"] = (
+		(normalized_df[f"{prefix}wavelet_norm_score"] - normalized_df[f"{prefix}wavelet_zscore_score"]).abs() /
+		(normalized_df[f"{prefix}wavelet_norm_score"] + normalized_df[f"{prefix}wavelet_zscore_score"]).abs()
+	)
 
-	normalized_df[f"{prefix}variability_score"] = (
-    normalized_df[f"{prefix}wavelet_norm_score"] - 0.1 * normalized_df[f"{prefix}wavelet_zscore_score"]
-)
+	normalized_df[f"{prefix}stability_adjusted_score"] = (
+		normalized_df[f"{prefix}wavelet_norm_score"] 
+		- 0.1 * normalized_df[f"{prefix}wavelet_zscore_score"] 
+		- 0.05 * normalized_df[f"{prefix}normalized_diff"]
+	)
 	# Rank results
 	ranked_results = normalized_df.sort_values(
-		by=f"{prefix}variability_score", ascending=False
+		by=f"{prefix}stability_adjusted_score", ascending=False
 	).reset_index(drop=True)
 	ranked_results[f"{prefix}wavelet_rank"] = ranked_results.index + 1
+	# Dynamically select the top N% of ranked results
+	percentage_of_results = 0.1  # Adjust percentage as needed
+	num_top_results = max(1, int(len(ranked_results) * percentage_of_results))  # At least one result
+	top_ranked_results = ranked_results.head(num_top_results)
+	# Select top configurations by wavelet, signal type, and wavelet type
+	grouping_cols = ['wavelet_type', 'wavelet'] if is_combined else ['wavelet']
+	grouped = ranked_results.groupby(grouping_cols)
 
+	subset_ranked_results = grouped.apply(
+        lambda group: group.loc[group[f"{prefix}stability_adjusted_score"].idxmax()]
+    ).reset_index(drop=True)
+
+	final_ranked_results = pd.concat([top_ranked_results, subset_ranked_results], ignore_index=True).drop_duplicates()
+	# Rerank subset results
+	final_ranked_results = final_ranked_results.sort_values(
+		by=f"{prefix}stability_adjusted_score", ascending=False
+	).reset_index(drop=True)
+	final_ranked_results[f"{prefix}final_wavelet_rank"] = final_ranked_results.index + 1
 	# Correlation between normalized and z-score combined scores
 	overall_correlation_norm_zscore = ranked_results[
 		[f"{prefix}wavelet_norm_score", f"{prefix}wavelet_zscore_score"]
@@ -273,7 +312,7 @@ def determine_best_wavelet_representation(
 
 	# Return the best configuration, rankings, and correlation
 	best_config = ranked_results[0:1]
-	return best_config, ranked_results, overall_correlation_norm_zscore
+	return best_config, ranked_results, final_ranked_results, overall_correlation_norm_zscore
 
 def compare_and_rank_wavelet_metrics(
 	raw_signal: np.ndarray, 
@@ -316,7 +355,9 @@ def compare_and_rank_wavelet_metrics(
 			'smoothness': 0.1,
 			'correlation': 0.1,
 			'avg_variance_across_levels': 0.1,
-			'variance_ratio_across_levels': 0.1
+			'variance_ratio_across_levels': 0.1,
+			'emd_value': 0.2,
+			'kl_divergence': 0.2,
 		}
 
 	dwt_wavelets = pywt.wavelist(kind='discrete')
@@ -369,10 +410,12 @@ def compare_and_rank_wavelet_metrics(
 	dwt_combined_skipped_results = pd.concat([dwt_raw_skipped_results, dwt_smoothed_skipped_results], ignore_index=True)
 	if not dwt_combined_skipped_results.empty:
 		dwt_combined_skipped_results.to_csv(f"{file_path}dwt_skipped_results.csv", index=False)
+
 	cwt_combined_results = pd.concat([cwt_raw_results, cwt_smoothed_results], ignore_index=True)
 	cwt_combined_skipped_results = pd.concat([cwt_raw_skipped_results, cwt_smoothed_skipped_results], ignore_index=True)
 	if not cwt_combined_skipped_results.empty:
 		cwt_combined_skipped_results.to_csv(f"{file_path}cwt_skipped_results.csv", index=False)
+
 	swt_combined_results = pd.concat([swt_raw_results, swt_smoothed_results], ignore_index=True)
 	swt_combined_skipped_results = pd.concat([swt_raw_skipped_results, swt_smoothed_skipped_results], ignore_index=True)
 	if not swt_combined_skipped_results.empty:
@@ -380,43 +423,47 @@ def compare_and_rank_wavelet_metrics(
 
 	# Ensure results are non-empty before ranking
 	if not dwt_combined_results.empty:
-		best_dwt, ranked_dwt, dwt_correlation_score = determine_best_wavelet_representation(dwt_combined_results, "DWT", weights, False)
-		ranked_dwt['wavelet_type'] = 'DWT'
-		ranked_dwt.to_csv(f"{file_path}dwt_results.csv", index=False)
+		best_dwt, ranked_dwt, subset_ranked_dwt, dwt_correlation_score = determine_best_wavelet_representation(dwt_combined_results, "DWT", weights, False)
+		subset_ranked_dwt['wavelet_type'] = 'DWT'
+		ranked_dwt.to_csv(f"{file_path}full_dwt_results.csv", index=False)
+		subset_ranked_dwt.to_csv(f"{file_path}subset_dwt_results.csv", index=False)
 		if not best_dwt.empty:
-			generate_table(best_dwt[['wavelet', 'signal_type', 'wavelet_rank', 'wavelet_norm_score', 'correlation_norm_zscore']], f"Best DWT Wavelet Configuration (Correlation: {dwt_correlation_score:.2f})")
+			generate_table(best_dwt[['wavelet', 'signal_type', 'wavelet_rank', 'stability_adjusted_score', 'wavelet_norm_score', 'wavelet_zscore_score','normalized_diff']], f"Best DWT Wavelet Configuration (Correlation: {dwt_correlation_score:.2f})")
 	else:
-		ranked_dwt = pd.DataFrame()
+		subset_ranked_dwt = pd.DataFrame()
 
 	if not cwt_combined_results.empty:
-		best_cwt, ranked_cwt, cwt_correlation_score = determine_best_wavelet_representation(cwt_combined_results, "CWT", weights, False)
-		ranked_cwt['wavelet_type'] = 'CWT'
-		ranked_cwt.to_csv(f"{file_path}cwt_results.csv", index=False)
+		best_cwt, ranked_cwt, subset_ranked_cwt, cwt_correlation_score = determine_best_wavelet_representation(cwt_combined_results, "CWT", weights, False)
+		subset_ranked_cwt['wavelet_type'] = 'CWT'
+		ranked_cwt.to_csv(f"{file_path}full_cwt_results.csv", index=False)
+		subset_ranked_cwt.to_csv(f"{file_path}subset_cwt_results.csv", index=False)
 		if not best_cwt.empty:
-			generate_table(best_cwt[['wavelet', 'signal_type', 'wavelet_rank', 'wavelet_norm_score', 'correlation_norm_zscore']], f"Best CWT Wavelet Configuration (Correlation: {cwt_correlation_score:.2f})")
+			generate_table(best_cwt[['wavelet', 'signal_type', 'wavelet_rank', 'stability_adjusted_score', 'wavelet_norm_score', 'wavelet_zscore_score','normalized_diff']], f"Best CWT Wavelet Configuration (Correlation: {cwt_correlation_score:.2f})")
 	else:
-		ranked_cwt = pd.DataFrame()
+		subset_ranked_cwt = pd.DataFrame()
 
 	if not swt_combined_results.empty:
-		best_swt, ranked_swt, swt_correlation_score = determine_best_wavelet_representation(swt_combined_results, "SWT", weights, False)
-		ranked_swt['wavelet_type'] = 'SWT'
-		ranked_swt.to_csv(f"{file_path}swt_results.csv", index=False)
+		best_swt, ranked_swt, subset_ranked_swt, swt_correlation_score = determine_best_wavelet_representation(swt_combined_results, "SWT", weights, False)
+		subset_ranked_swt['wavelet_type'] = 'SWT'
+		ranked_swt.to_csv(f"{file_path}full_swt_results.csv", index=False)
+		subset_ranked_swt.to_csv(f"{file_path}subset_swt_results.csv", index=False)
 		if not best_swt.empty:
-			generate_table(best_swt[['wavelet', 'signal_type', 'wavelet_rank','wavelet_norm_score', 'correlation_norm_zscore']], f"Best SWT Wavelet Configuration (Correlation: {swt_correlation_score:.2f})")
+			generate_table(best_swt[['wavelet', 'signal_type', 'wavelet_rank', 'stability_adjusted_score', 'wavelet_norm_score', 'wavelet_zscore_score','normalized_diff']], f"Best SWT Wavelet Configuration (Correlation: {swt_correlation_score:.2f})")
 	else:
-		ranked_swt = pd.DataFrame()
+		subset_ranked_swt = pd.DataFrame()
 
 	# Combine DWT, CWT, and SWT results
-	combined_results = pd.concat([ranked_dwt, ranked_cwt, ranked_swt], ignore_index=True)
+	combined_results = pd.concat([subset_ranked_dwt, subset_ranked_cwt, subset_ranked_swt], ignore_index=True)
 
 	# Determine overall best representation
 	if not combined_results.empty:
-		best_combined_results, ranked_combined_results, combined_correlation_score = determine_best_wavelet_representation(
+		best_combined_results, ranked_combined_results, subset_ranked_combined_results, combined_correlation_score = determine_best_wavelet_representation(
 			combined_results, "Combined", weights, True
 		)
 		ranked_combined_results.to_csv(f"{file_path}combined_results.csv", index=False)
+		subset_ranked_combined_results.to_csv(f"{file_path}subset_combined_results.csv", index=False)
 		if not best_combined_results.empty:
-			generate_table(best_combined_results[['wavelet', 'signal_type', 'combined_wavelet_rank','combined_wavelet_norm_score', 'combined_correlation_norm_zscore']], f"Best Combined Wavelet Configuration (Correlation: {combined_correlation_score:.2f})")
+			generate_table(best_combined_results[['wavelet', 'signal_type', 'combined_wavelet_rank', 'combined_stability_adjusted_score', 'wavelet_norm_score', 'combined_wavelet_zscore_score','combined_normalized_diff']], f"Best Combined Wavelet Configuration (Correlation: {combined_correlation_score:.2f})")
 	else:
 		best_combined_results = None
 
@@ -529,120 +576,120 @@ def plot_annotated_periodicals(merged_expanded_df, grouped_df, output_dir, perio
 ## MAIN FUNCTIONS
 
 def generate_signal_processing_data_parallel(volume_paths_df: pd.DataFrame, output_dir: str, should_use_parallel: bool) -> pd.DataFrame:
-    """
-    Parallelized generation of signal processing data for multiple volumes.
+	"""
+	Parallelized generation of signal processing data for multiple volumes.
 
-    Parameters:
-    -----------
-    volume_paths_df : pd.DataFrame
-        DataFrame containing volume metadata and file paths.
-    output_dir : str
-        Directory to save output files and results.
+	Parameters:
+	-----------
+	volume_paths_df : pd.DataFrame
+		DataFrame containing volume metadata and file paths.
+	output_dir : str
+		Directory to save output files and results.
 
-    Returns:
-    --------
-    pd.DataFrame
-        DataFrame with aggregated results for all processed volumes.
-    """
-    def process_volume(volume):
-        """
-        Process a single volume for wavelet and signal analysis.
-        """
-        try:
-            # Process tokens and signals
-            merged_expanded_df, grouped_df, tokens_raw_signal, tokens_smoothed_signal = process_tokens(
-                volume['file_path'],
-                volume['is_annotated_periodical'],
-                volume['should_filter_greater_than_numbers'],
-                volume['should_filter_implied_zeroes'],
-            )
+	Returns:
+	--------
+	pd.DataFrame
+		DataFrame with aggregated results for all processed volumes.
+	"""
+	def process_volume(volume):
+		"""
+		Process a single volume for wavelet and signal analysis.
+		"""
+		try:
+			# Process tokens and signals
+			merged_expanded_df, grouped_df, tokens_raw_signal, tokens_smoothed_signal = process_tokens(
+				volume['file_path'],
+				volume['is_annotated_periodical'],
+				volume['should_filter_greater_than_numbers'],
+				volume['should_filter_implied_zeroes'],
+			)
 
-            # Perform wavelet analysis
-            wavelet_results_df, best_wavelet_config, combined_wavelet_correlation, dwt_skipped, cwt_skipped, swt_skipped = compare_and_rank_wavelet_metrics(
-                tokens_raw_signal, tokens_smoothed_signal, should_use_parallel
-            )
+			# Perform wavelet analysis
+			wavelet_results_df, best_wavelet_config, combined_wavelet_correlation, dwt_skipped, cwt_skipped, swt_skipped = compare_and_rank_wavelet_metrics(
+				tokens_raw_signal, tokens_smoothed_signal, should_use_parallel
+			)
 
-            # Calculate signal metrics
-            signal_metrics_results = []
-            for signal_type, signal in {
-                "raw": merged_expanded_df['tokens_per_page'].values,
-                "smoothed": merged_expanded_df['smoothed_tokens_per_page'].values,
-            }.items():
-                result = calculate_signal_metrics(
-                    tokens_signal=signal,
-                    use_signal_type=signal_type,
-                    min_tokens=merged_expanded_df['tokens_per_page'].min(),
-                    prominence=1.0,
-                    distance=5,
-                    verbose=False,
-                )
-                signal_metrics_results.append(result)
-            signal_metrics_df = pd.DataFrame(signal_metrics_results)
+			# Calculate signal metrics
+			signal_metrics_results = []
+			for signal_type, signal in {
+				"raw": merged_expanded_df['tokens_per_page'].values,
+				"smoothed": merged_expanded_df['smoothed_tokens_per_page'].values,
+			}.items():
+				result = calculate_signal_metrics(
+					tokens_signal=signal,
+					use_signal_type=signal_type,
+					min_tokens=merged_expanded_df['tokens_per_page'].min(),
+					prominence=1.0,
+					distance=5,
+					verbose=False,
+				)
+				signal_metrics_results.append(result)
+			signal_metrics_df = pd.DataFrame(signal_metrics_results)
 
-            # Annotate and plot issues for annotated periodicals
-            missing_issues, chart = [], None
-            if volume['is_annotated_periodical'] and len(grouped_df) > 1:
-                missing_issues, chart = plot_annotated_periodicals(
-                    merged_expanded_df,
-                    grouped_df,
-                    output_dir,
-                    volume['lowercase_periodical_name'],
-                    signal_metrics_df.iloc[0].get('raw_dynamic_cutoff', 0),
-                )
+			# Annotate and plot issues for annotated periodicals
+			missing_issues, chart = [], None
+			if volume['is_annotated_periodical'] and len(grouped_df) > 1:
+				missing_issues, chart = plot_annotated_periodicals(
+					merged_expanded_df,
+					grouped_df,
+					output_dir,
+					volume['lowercase_periodical_name'],
+					signal_metrics_df.iloc[0].get('raw_dynamic_cutoff', 0),
+				)
 
-            # Collect results
-            best_wavelet_dict = best_wavelet_config.iloc[0].to_dict()
-            return {
-                "htid": merged_expanded_df['htid'].unique()[0],
-                "lowercase_periodical_name": volume['lowercase_periodical_name'],
-                "avg_tokens": merged_expanded_df['tokens_per_page'].mean(),
-                "avg_digits": merged_expanded_df['digits_per_page'].mean(),
-                "raw_likely_covers": merged_expanded_df[merged_expanded_df['tokens_per_page'] <= signal_metrics_df.iloc[0].get('raw_dynamic_cutoff', 0)].page_number.tolist(),
-                "wavelet_correlation": combined_wavelet_correlation,
-                "wavelet_results_df": wavelet_results_df,
-                "dwt_skipped": dwt_skipped,
-                "cwt_skipped": cwt_skipped,
-                "swt_skipped": swt_skipped,
-                "missing_issues": missing_issues,
-                "chart": chart,
-            }
-        except Exception as e:
-            return {"error": str(e), "volume": volume}
+			# Collect results
+			best_wavelet_dict = best_wavelet_config.iloc[0].to_dict()
+			return {
+				"htid": merged_expanded_df['htid'].unique()[0],
+				"lowercase_periodical_name": volume['lowercase_periodical_name'],
+				"avg_tokens": merged_expanded_df['tokens_per_page'].mean(),
+				"avg_digits": merged_expanded_df['digits_per_page'].mean(),
+				"raw_likely_covers": merged_expanded_df[merged_expanded_df['tokens_per_page'] <= signal_metrics_df.iloc[0].get('raw_dynamic_cutoff', 0)].page_number.tolist(),
+				"wavelet_correlation": combined_wavelet_correlation,
+				"wavelet_results_df": wavelet_results_df,
+				"dwt_skipped": dwt_skipped,
+				"cwt_skipped": cwt_skipped,
+				"swt_skipped": swt_skipped,
+				"missing_issues": missing_issues,
+				"chart": chart,
+			}
+		except Exception as e:
+			return {"error": str(e), "volume": volume}
 
-    # Prepare for parallel processing
-    volume_paths = volume_paths_df.to_dict(orient="records")
-    results = []
-    max_workers = min(len(volume_paths), multiprocessing.cpu_count() - 1)
-    console.print(f"[cyan]Using {max_workers} workers for parallel processing.[/cyan]")
+	# Prepare for parallel processing
+	volume_paths = volume_paths_df.to_dict(orient="records")
+	results = []
+	max_workers = min(len(volume_paths), multiprocessing.cpu_count() - 1)
+	console.print(f"[cyan]Using {max_workers} workers for parallel processing.[/cyan]")
 
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(process_volume, volume) for volume in volume_paths]
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing volumes"):
-            try:
-                result = future.result()
-                if "error" not in result:
-                    results.append(result)
-                else:
-                    console.print(f"[red]Error in volume: {result['error']}[/red]")
-            except Exception as e:
-                console.print(f"[red]Unexpected error during volume processing: {e}[/red]")
+	with ProcessPoolExecutor(max_workers=max_workers) as executor:
+		futures = [executor.submit(process_volume, volume) for volume in volume_paths]
+		for future in tqdm(as_completed(futures), total=len(futures), desc="Processing volumes"):
+			try:
+				result = future.result()
+				if "error" not in result:
+					results.append(result)
+				else:
+					console.print(f"[red]Error in volume: {result['error']}[/red]")
+			except Exception as e:
+				console.print(f"[red]Unexpected error during volume processing: {e}[/red]")
 
-    # Aggregate results
-    processed_volumes = pd.DataFrame(results)
-    console.print(f"[green]Successfully processed {len(processed_volumes)} volumes.[/green]")
+	# Aggregate results
+	processed_volumes = pd.DataFrame(results)
+	console.print(f"[green]Successfully processed {len(processed_volumes)} volumes.[/green]")
 
-    # Handle Altair charts
-    altair_charts = [result["chart"] for result in results if result.get("chart")]
-    if altair_charts:
-        combined_charts = alt.vconcat(*altair_charts)
-        save_chart(
-            combined_charts, f"{output_dir}/annotated_tokens_per_page/{volume_paths_df['lowercase_periodical_name'].iloc[0]}_tokens_per_page_chart.png", scale_factor=2.0
-        )
+	# Handle Altair charts
+	altair_charts = [result["chart"] for result in results if result.get("chart")]
+	if altair_charts:
+		combined_charts = alt.vconcat(*altair_charts)
+		save_chart(
+			combined_charts, f"{output_dir}/annotated_tokens_per_page/{volume_paths_df['lowercase_periodical_name'].iloc[0]}_tokens_per_page_chart.png", scale_factor=2.0
+		)
 
-    # Save to CSV
-    processed_volumes.to_csv(os.path.join(output_dir, "processed_volumes.csv"), index=False)
+	# Save to CSV
+	processed_volumes.to_csv(os.path.join(output_dir, "processed_volumes.csv"), index=False)
 
-    return processed_volumes
+	return processed_volumes
 
 def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: str, should_use_parallel: bool, rerun_data: bool) -> pd.DataFrame:
 	"""
@@ -663,6 +710,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 	periodical_name = volume_paths_df['lowercase_periodical_name'].unique()[0]
 	altair_charts = []
 	for _, volume in volume_paths_df.iterrows():
+		console.print(f"Processing volume: {volume['htid']}", style="bright_blue")
 		merged_expanded_df, grouped_df, tokens_raw_signal, tokens_smoothed_signal = process_tokens(
 			volume['file_path'], 
 			volume['is_annotated_periodical'], 

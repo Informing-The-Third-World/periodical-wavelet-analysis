@@ -13,6 +13,8 @@ import pywt
 from scipy.fft import fft
 from scipy.signal import find_peaks
 from skimage.metrics import peak_signal_noise_ratio as psnr
+from scipy.stats import wasserstein_distance
+from scipy.special import rel_entr
 
 # Disable max rows for Altair
 alt.data_transformers.disable_max_rows()
@@ -65,7 +67,9 @@ def process_wavelet_results(results: list, skipped_results: list, signal_type: s
 	skipped_results_df = pd.DataFrame(skipped_results)
 	combined_skipped_results_df = pd.concat([error_results, skipped_results_df], ignore_index=True)
 	console.print(f"Total skipped results for {signal_type}: {len(combined_skipped_results_df)}", style="bright_red")
-
+	if len(cleaned_results_df) == 0:
+		console.print(f"[bright_red]No valid results found for {signal_type}.[/bright_red]")
+		console.print(f"First row error: {combined_skipped_results_df.iloc[0]['error']}")
 	return cleaned_results_df, combined_skipped_results_df
 
 def energy_entropy_ratio(coeffs: list) -> float:
@@ -428,29 +432,29 @@ def validate_max_level(signal_length: int, requested_max_level: int) -> tuple:
 	return validated_max_level, is_original_level
 
 def is_wavelet_compatible(signal_length: int, wavelet: str, level: int) -> bool:
-    """
-    Check if the wavelet is compatible with the signal length at the given level.
+	"""
+	Check if the wavelet is compatible with the signal length at the given level.
 
-    Parameters:
-    -----------
-    signal_length : int
-        Length of the signal.
-    wavelet : str
-        Name of the wavelet.
-    level : int
-        Decomposition level.
+	Parameters:
+	-----------
+	signal_length : int
+		Length of the signal.
+	wavelet : str
+		Name of the wavelet.
+	level : int
+		Decomposition level.
 
-    Returns:
-    --------
-    bool
-        True if the wavelet is compatible, False otherwise.
-    """
-    try:
-        wavelet_filter_len = pywt.Wavelet(wavelet).dec_len
-        max_level = pywt.dwt_max_level(signal_length, wavelet_filter_len)
-        return level <= max_level
-    except ValueError:
-        return False
+	Returns:
+	--------
+	bool
+		True if the wavelet is compatible, False otherwise.
+	"""
+	try:
+		wavelet_filter_len = pywt.Wavelet(wavelet).dec_len
+		max_level = pywt.dwt_max_level(signal_length, wavelet_filter_len)
+		return level <= max_level
+	except ValueError:
+		return False
 
 def determine_scales(signal_length: int, max_scale: int = 128, dynamic: bool = True) -> np.ndarray:
 	"""
@@ -479,82 +483,86 @@ def determine_scales(signal_length: int, max_scale: int = 128, dynamic: bool = T
 	return scales
 
 def process_dwt_wavelet(signal: np.ndarray, wavelet: str, modes: list, signal_type: str) -> tuple:
-    """
-    Process a single DWT wavelet for the given signal and modes.
+	"""
+	Process a single DWT wavelet for the given signal and modes.
 
-    Parameters:
-    -----------
-    signal : np.ndarray
-        The signal to analyze.
-    wavelet : str
-        The wavelet to use for decomposition.
-    modes : list
-        List of signal extension modes to test.
-    signal_type : str
-        Type of signal either raw or smoothed.
+	Parameters:
+	-----------
+	signal : np.ndarray
+		The signal to analyze.
+	wavelet : str
+		The wavelet to use for decomposition.
+	modes : list
+		List of signal extension modes to test.
+	signal_type : str
+		Type of signal either raw or smoothed.
 
-    Returns:
-    --------
-    tuple:
-        - results: List of dictionaries containing wavelet analysis results.
-        - skipped_wavelets: List of dictionaries containing skipped wavelets and errors.
-    """
-    results = []
-    skipped_wavelets = []
-    try:
-        wavelet_filter_len = pywt.Wavelet(wavelet).dec_len
-        if len(signal) < wavelet_filter_len:
-            raise ValueError(f"Signal is too short for wavelet {wavelet}")
+	Returns:
+	--------
+	tuple:
+		- results: List of dictionaries containing wavelet analysis results.
+		- skipped_wavelets: List of dictionaries containing skipped wavelets and errors.
+	"""
+	results = []
+	skipped_wavelets = []
+	try:
+		wavelet_filter_len = pywt.Wavelet(wavelet).dec_len
+		if len(signal) < wavelet_filter_len:
+			raise ValueError(f"Signal is too short for wavelet {wavelet}")
 
-        max_level = pywt.dwt_max_level(len(signal), wavelet_filter_len)
-        for level in range(1, max_level + 1):
-            for mode in modes:
-                # Check compatibility
-                if not is_wavelet_compatible(len(signal), wavelet, level):
-                    skipped_wavelets.append({
-                        'wavelet': wavelet,
-                        'wavelet_level': level,
-                        'wavelet_mode': mode,
-                        'error': f"Incompatible wavelet or decomposition level for signal length {len(signal)}.",
-                        'signal_length': len(signal)
-                    })
-                    continue
+		max_level = pywt.dwt_max_level(len(signal), wavelet_filter_len)
+		for level in range(1, max_level + 1):
+			for mode in modes:
+				# Check compatibility
+				if not is_wavelet_compatible(len(signal), wavelet, level):
+					skipped_wavelets.append({
+						'wavelet': wavelet,
+						'wavelet_level': level,
+						'wavelet_mode': mode,
+						'error': f"Incompatible wavelet or decomposition level for signal length {len(signal)}.",
+						'signal_length': len(signal)
+					})
+					continue
 
-                try:
-                    coeffs = pywt.wavedec(signal, wavelet, level=level, mode=mode)
-                    reconstructed_signal = pywt.waverec(coeffs, wavelet, mode=mode)[:len(signal)]
+				try:
+					coeffs = pywt.wavedec(signal, wavelet, level=level, mode=mode)
+					reconstructed_signal = pywt.waverec(coeffs, wavelet, mode=mode)[:len(signal)]
 
-                    mse = np.mean((signal - reconstructed_signal) ** 2)
-                    psnr_value = psnr(signal, reconstructed_signal, data_range=np.max(signal) - np.min(signal))
-                    energy_entropy = energy_entropy_ratio(coeffs)
-                    sparsity, threshold = adaptive_sparsity_measure(coeffs)
-                    additional_features = compute_additional_wavelet_features(coeffs, reconstructed_signal, signal)
+					mse = np.mean((signal - reconstructed_signal) ** 2)
+					psnr_value = psnr(signal, reconstructed_signal, data_range=np.max(signal) - np.min(signal))
+					energy_entropy = energy_entropy_ratio(coeffs)
+					sparsity, threshold = adaptive_sparsity_measure(coeffs)
+					additional_features = compute_additional_wavelet_features(coeffs, reconstructed_signal, signal)
+					emd_value = wasserstein_distance(signal, reconstructed_signal)
+					kl_div_value = sum(rel_entr(signal, reconstructed_signal + 1e-12))
 
-                    results.append({
-                        'wavelet': wavelet,
-                        'wavelet_level': level,
-                        'wavelet_mode': mode,
-                        'wavelet_mse': mse,
-                        'wavelet_psnr': psnr_value,
-                        'wavelet_energy_entropy': energy_entropy,
-                        'wavelet_sparsity': sparsity,
-                        'wavelet_adaptive_threshold': threshold,
-                        'signal_length': len(signal),
-                        'signal_type': signal_type,
-                        **additional_features
-                    })
-                except Exception as e:
-                    skipped_wavelets.append({
-                        'wavelet': wavelet,
-                        'wavelet_level': level,
-                        'wavelet_mode': mode,
-                        'error': str(e),
-                        'signal_length': len(signal)
-                    })
-    except Exception as e:
-        skipped_wavelets.append({'wavelet': wavelet, 'error': str(e)})
+					results.append({
+						'wavelet': wavelet,
+						'wavelet_level': level,
+						'wavelet_mode': mode,
+						'wavelet_mse': mse,
+						'wavelet_psnr': psnr_value,
+						'wavelet_energy_entropy': energy_entropy,
+						'wavelet_sparsity': sparsity,
+						'wavelet_adaptive_threshold': threshold,
+						'signal_length': len(signal),
+						'signal_type': signal_type,
+						'emd_value': emd_value,
+						'kl_divergence': kl_div_value,
+						**additional_features
+					})
+				except Exception as e:
+					skipped_wavelets.append({
+						'wavelet': wavelet,
+						'wavelet_level': level,
+						'wavelet_mode': mode,
+						'error': str(e),
+						'signal_length': len(signal)
+					})
+	except Exception as e:
+		skipped_wavelets.append({'wavelet': wavelet, 'error': str(e)})
 
-    return results, skipped_wavelets
+	return results, skipped_wavelets
 
 def evaluate_dwt_performance(signal: np.ndarray, wavelets: list, modes: list, signal_type: str) -> tuple:
 	"""
@@ -678,6 +686,9 @@ def process_cwt_wavelet(signal: np.ndarray, wavelet: str, scales: np.ndarray, si
 		# Compute additional features
 		additional_features = compute_additional_wavelet_features(coeffs, reconstructed_signal, signal)
 
+		# Calculate KL Divergence and EMD
+		emd_value = wasserstein_distance(signal, reconstructed_signal)
+		kl_div_value = sum(rel_entr(signal, reconstructed_signal))
 		# Append Results
 		results.append({
 			'signal_type': signal_type,
@@ -688,6 +699,8 @@ def process_cwt_wavelet(signal: np.ndarray, wavelet: str, scales: np.ndarray, si
 			'wavelet_psnr': psnr_value,
 			'signal_length': len(signal),
 			'scales_used': len(scales),
+			'emd_value': emd_value,
+			'kl_divergence': kl_div_value,
 			**additional_features
 		})
 	except Exception as e:
@@ -780,92 +793,105 @@ def evaluate_cwt_performance_parallel(signal: np.ndarray, wavelets: list, signal
 	return cleaned_total_results, cleaned_skipped_results
 
 def process_swt_wavelet(signal: np.ndarray, wavelet: str, signal_type: str, max_level: int) -> tuple:
-    """
-    Process a single wavelet for Stationary Wavelet Transform (SWT).
+	"""
+	Process a single wavelet for Stationary Wavelet Transform (SWT).
 
-    Parameters:
-    -----------
-    signal : np.ndarray
-        Signal to analyze.
-    wavelet : str
-        Wavelet to use for decomposition.
-    max_level : int
-        The maximum decomposition level for SWT.
-    signal_type : str
-        The type of signal being analyzed ('raw' or 'smoothed').
+	Parameters:
+	-----------
+	signal : np.ndarray
+		Signal to analyze.
+	wavelet : str
+		Wavelet to use for decomposition.
+	max_level : int
+		The maximum decomposition level for SWT.
+	signal_type : str
+		The type of signal being analyzed ('raw' or 'smoothed').
 
-    Returns:
-    --------
-    tuple:
-    - results: List of dictionaries containing wavelet analysis results.
-    - skipped_results: List of dictionaries containing skipped wavelets and errors.
-    """
-    results = []
-    skipped_results = []
+	Returns:
+	--------
+	tuple:
+	- results: List of dictionaries containing wavelet analysis results.
+	- skipped_results: List of dictionaries containing skipped wavelets and errors.
+	"""
+	results = []
+	skipped_results = []
 
-    try:
-        # Validate and adjust max_level
-        max_level, is_original_level = validate_max_level(len(signal), max_level)
-        if max_level < 1:
-            raise ValueError(f"Max level too low for wavelet {wavelet} and signal length {len(signal)}.")
+	try:
+		# Validate and adjust max_level
+		max_level, is_original_level = validate_max_level(len(signal), max_level)
+		if max_level < 1:
+			skipped_results.append({
+				'wavelet': wavelet,
+				'error': f"Max level too low for wavelet {wavelet} and signal length {len(signal)}.",
+				'signal_length': len(signal),
+				'signal_type': signal_type,
+				'decomposition_levels': max_level
+			})
+			raise ValueError(f"Max level too low for wavelet {wavelet} and signal length {len(signal)}.")
 
-        # Pad the signal to meet SWT requirements
-        padded_signal, is_padded = pad_signal(signal, max_level)
+		# Pad the signal to meet SWT requirements
+		padded_signal, is_padded = pad_signal(signal, max_level)
 
-        # Decompose signal using SWT
-        coeffs = pywt.swt(padded_signal, wavelet=wavelet, level=max_level, start_level=0)
-        approx_coeffs, detail_coeffs = zip(*coeffs)
+		# Decompose signal using SWT
+		coeffs = pywt.swt(padded_signal, wavelet=wavelet, level=max_level, start_level=0)
+		approx_coeffs, detail_coeffs = zip(*coeffs)
 
-        # Reconstruct and trim signal to original length
-        reconstructed_signal = np.sum([approx_coeffs[-1]] + list(detail_coeffs), axis=0)[:len(signal)]
+		# Reconstruct and trim signal to original length
+		reconstructed_signal = np.sum([approx_coeffs[-1]] + list(detail_coeffs), axis=0)[:len(signal)]
 
-        # Compute PSNR
-        wavelet_psnr = psnr(signal, reconstructed_signal, data_range=np.max(signal) - np.min(signal))
+		# Compute PSNR
+		wavelet_psnr = psnr(signal, reconstructed_signal, data_range=np.max(signal) - np.min(signal))
 
-        # Compute Metrics
-        total_energy = np.sum([np.sum(np.array(c) ** 2) for c in detail_coeffs])
-        entropy = -np.sum(
-            [
-                np.sum(
-                    np.array(c) ** 2 / total_energy
-                    * np.log2(np.array(c) ** 2 / total_energy + 1e-12)
-                )
-                for c in detail_coeffs
-            ]
-        )
-        energy_entropy = total_energy / (entropy if entropy > 0 else np.inf)
+		# Compute Metrics
+		total_energy = np.sum([np.sum(np.array(c) ** 2) for c in detail_coeffs])
+		entropy = -np.sum(
+			[
+				np.sum(
+					np.array(c) ** 2 / total_energy
+					* np.log2(np.array(c) ** 2 / total_energy + 1e-12)
+				)
+				for c in detail_coeffs
+			]
+		)
+		energy_entropy = total_energy / (entropy if entropy > 0 else np.inf)
 
-        # Use adaptive sparsity measure
-        sparsity, adaptive_threshold = adaptive_sparsity_measure(detail_coeffs)
+		# Use adaptive sparsity measure
+		sparsity, adaptive_threshold = adaptive_sparsity_measure(detail_coeffs)
 
-        # Compute additional features
-        additional_features = compute_additional_wavelet_features(coeffs, reconstructed_signal, signal)
+		# Compute additional features
+		additional_features = compute_additional_wavelet_features(coeffs, reconstructed_signal, signal)
 
-        # Append results
-        results.append({
-            'signal_type': signal_type,
-            'wavelet': wavelet,
-            'wavelet_energy_entropy': energy_entropy,
-            'wavelet_sparsity': sparsity,
-            'wavelet_adaptive_threshold': adaptive_threshold,
-            'wavelet_psnr': wavelet_psnr,
-            'signal_length': len(signal),
-            'decomposition_levels': max_level,
-            'original_level': is_original_level,
-            'padded': is_padded,
-            **additional_features
-        })
+		# Calculate KL Divergence and EMD
+		emd_value = wasserstein_distance(signal, reconstructed_signal)
+		kl_div_value = sum(rel_entr(signal, reconstructed_signal))
 
-    except Exception as e:
-        skipped_results.append({
-            'wavelet': wavelet,
-            'error': str(e),
-            'signal_length': len(signal),
-            'signal_type': signal_type,
-            'decomposition_levels': max_level
-        })
+		# Append results
+		results.append({
+			'signal_type': signal_type,
+			'wavelet': wavelet,
+			'wavelet_energy_entropy': energy_entropy,
+			'wavelet_sparsity': sparsity,
+			'wavelet_adaptive_threshold': adaptive_threshold,
+			'wavelet_psnr': wavelet_psnr,
+			'signal_length': len(signal),
+			'decomposition_levels': max_level,
+			'original_level': is_original_level,
+			'padded': is_padded,
+			'emd_value': emd_value,
+			'kl_divergence': kl_div_value,
+			**additional_features
+		})
 
-    return results, skipped_results
+	except Exception as e:
+		skipped_results.append({
+			'wavelet': wavelet,
+			'error': str(e),
+			'signal_length': len(signal),
+			'signal_type': signal_type,
+			'decomposition_levels': max_level
+		})
+
+	return results, skipped_results
 
 def evaluate_swt_performance(signal: np.ndarray, wavelets: list, signal_type: str, max_level: int = 5) -> tuple:
 	"""
