@@ -2,24 +2,25 @@
 import os
 import sys
 import warnings
+import shutil
 
 # Third-party imports
 import pandas as pd
 import numpy as np
 import altair as alt
 import matplotlib.pyplot as plt
-from multiprocessing import Pool, cpu_count
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
 from tqdm import tqdm
 from rich.console import Console
 import pywt
-from scipy.fft import fft
-from scipy.signal import find_peaks
 from sklearn.preprocessing import MinMaxScaler
 from skimage.metrics import peak_signal_noise_ratio as psnr
 
 # Local application imports
 sys.path.append("..")
 from segmentation_scripts.utils import read_csv_file, get_data_directory_path, save_chart, process_file, generate_table
+from segmentation_scripts.signal_processing import evaluate_dwt_performance, evaluate_dwt_performance_parallel, evaluate_cwt_performance, evaluate_cwt_performance_parallel, evaluate_swt_performance, evaluate_swt_performance_parallel, calculate_signal_metrics
 
 # Disable max rows for Altair
 alt.data_transformers.disable_max_rows()
@@ -131,585 +132,30 @@ def check_if_actual_issue(row, grouped_df):
 	subset_grouped_df = grouped_df[grouped_df.first_page == row.page_number]
 	return len(subset_grouped_df) > 0
 
-## WAVELET SIGNAL ANALYSIS CODE
+## WAVELET RANKING AND COMPARISON FUNCTIONS
 
-def energy_entropy_ratio(coeffs: list) -> float:
-	"""
-	Compute energy-to-entropy ratio for wavelet coefficients.
-
-	Parameters:
-	-----------
-	coeffs : list of np.ndarray
-		Wavelet decomposition coefficients.
-
-	Returns:
-	--------
-	ratio : float
-		Energy-to-entropy ratio.
-	"""
-	# Use absolute values of coefficients for energy and entropy computation
-	magnitudes = np.abs(coeffs)
-	total_energy = np.sum(magnitudes ** 2)
-	entropy = -np.sum(
-		(magnitudes ** 2 / total_energy) * np.log2(magnitudes ** 2 / total_energy + 1e-12)
-	)  # Add a small constant to avoid log(0)
-	return total_energy / (entropy if entropy > 0 else 1e-12)  # Avoid division by zero
-
-def adaptive_threshold(coeffs: list) -> float:
-	"""
-	Calculate an adaptive threshold based on the Median Absolute Deviation (MAD).
-
-	Parameters:
-	----------
-	coeffs : list of np.ndarray
-		Wavelet decomposition coefficients.
-
-	Returns:
-	--------
-	threshold : float
-		Adaptive threshold for sparsity computation.
-	"""
-	flat_coeffs = np.abs(np.concatenate(coeffs))  # Flatten coefficients and take absolute values
-	mad = np.median(np.abs(flat_coeffs - np.median(flat_coeffs)))  # Compute MAD
-	return mad * 1.4826  # Scale factor for Gaussian distribution
-
-def adaptive_sparsity_measure(coeffs: list) -> tuple:
-	"""
-	Measure sparsity of wavelet coefficients using an adaptive threshold.
-
-	Parameters:
-	-----------
-	coeffs : list of np.ndarray
-		Wavelet decomposition coefficients.
-
-	Returns:
-	--------
-	sparsity : float
-		Percentage of near-zero coefficients based on adaptive threshold.
-	threshold : float
-		Computed adaptive threshold for sparsity measurement.
-	"""
-	flat_coeffs = np.abs(np.concatenate(coeffs))
-	
-	# Calculate adaptive threshold using Median Absolute Deviation (MAD)
-	threshold = np.median(flat_coeffs) * 1.4826  # MAD scaling for normal distribution
-	
-	# Compute sparsity as the percentage of coefficients below the adaptive threshold
-	sparsity = np.sum(flat_coeffs < threshold) / len(flat_coeffs)
-	
-	return sparsity, threshold
-
-def wavelet_entropy(coeffs: list) -> float:
-	"""
-	Calculate wavelet entropy as a measure of signal complexity.
-
-	Parameters:
-	-----------
-	coeffs : list of np.ndarray
-		Wavelet decomposition coefficients.
-	
-	Returns:
-	-----------
-	entropy : float
-		Wavelet entropy.
-	"""
-	magnitudes = np.abs(coeffs)
-	total_energy = np.sum(magnitudes ** 2)
-	probabilities = (magnitudes ** 2) / (total_energy + 1e-12)
-	return -np.sum(probabilities * np.log2(probabilities + 1e-12))
-
-def signal_smoothness(signal: np.ndarray) -> float:
-	"""
-	Compute signal smoothness based on second-order differences.
-
-	Parameters:
-	-----------
-	signal : np.ndarray
-		Signal to analyze.
-
-	Returns:
-	-----------
-	smoothness : float
-		Smoothness measure based on second-order differences.
-	"""
-	second_derivative = np.diff(signal, n=2)
-	smoothness = 1 / (1 + np.mean(second_derivative ** 2))
-	return smoothness
-
-def correlation_coefficients(original: np.ndarray, reconstructed: np.ndarray) -> float:
-	"""
-	Calculate the correlation coefficient between the original and reconstructed signals.
-
-	Parameters:
-	-----------
-	original : np.ndarray
-		The original signal.
-	reconstructed : np.ndarray
-		The reconstructed signal.
-
-	Returns:
-	-----------
-	correlation : float
-		Correlation coefficient.
-	"""
-	return np.corrcoef(original, reconstructed)[0, 1]
-
-def signal_variance_across_levels(coeffs: list) -> list:
-	"""
-	Calculate the variance of wavelet coefficients across decomposition levels.
-
-	Parameters:
-	-----------
-	coeffs : list of np.ndarray
-		Variance of coefficients across levels.
-
-	Returns:
-	-----------
-	variances : list
-		Variance of coefficients across levels.
-	"""
-	return [np.var(c) for c in coeffs]
-
-def compute_additional_wavelet_features(coeffs: list, reconstructed_signal: np.ndarray, original_signal: np.ndarray) -> dict:
-	"""
-	Compute additional features from wavelet coefficients and reconstructed signal.
-	
-	Parameters:
-	----------
-	coeffs : list or np.ndarray
-		Wavelet decomposition coefficients.
-	reconstructed_signal : np.ndarray
-		Signal reconstructed from the wavelet coefficients.
-	original_signal : np.ndarray
-		The original signal used for decomposition.
-
-	Returns:
-	--------
-	features : dict
-		Dictionary containing additional computed features.
-	"""
-	entropy = wavelet_entropy(coeffs)
-	variances = signal_variance_across_levels(coeffs)
-	avg_variance = np.mean(variances)
-	variance_ratio = max(variances) / (sum(variances) + 1e-12)
-	smoothness = signal_smoothness(reconstructed_signal)
-	correlation = correlation_coefficients(original_signal, reconstructed_signal)
-
-	return {
-		"wavelet_entropy": entropy,
-		"avg_variance_across_levels": avg_variance,
-		"variance_ratio_across_levels": variance_ratio,
-		"smoothness": smoothness,
-		"correlation": correlation,
-	}
-
-def calculate_signal_metrics(
-	tokens_signal: np.ndarray,
-	use_signal_type: str,
-	min_tokens: float,
-	prominence=1.0,
-	distance=5,
-	verbose=False
-) -> dict:
-	"""
-	Calculate metrics for a given signal, including dominant frequency, dynamic cutoff,
-	relative peak detection, autocorrelation, signal envelope, and spectral features.
-
-	Parameters
-	----------
-	tokens_signal : np.ndarray
-		The signal to be analyzed.
-	use_signal_type : str
-		The type of page being analyzed (e.g., raw or smoothed "tokens_per_page").
-	min_tokens : float
-		The minimum observed tokens per page in the original scale.
-	prominence : float, optional
-		Minimum prominence of peaks for relative detection.
-	distance : int, optional
-		Minimum distance between peaks for relative detection.
-	verbose : bool, optional
-		Whether to log detailed metrics for debugging.
-
-	Returns
-	-------
-	dict
-		Results containing signal metrics.
-	"""
-	# Ensure signal is valid
-	if tokens_signal is None or len(tokens_signal) == 0:
-		console.print(f"[bright_red]Error: Empty or invalid signal for {use_signal_type}.[/bright_red]")
-		return {}
-
-	# Clean the signal to handle NaN or Inf values
-	tokens_signal = np.nan_to_num(tokens_signal, nan=0.0, posinf=0.0, neginf=0.0)
-
-	try:
-		# Perform FFT for frequency analysis
-		tokens_fft = fft(tokens_signal)
-		frequencies = np.fft.fftfreq(len(tokens_fft))
-
-		# Analyze positive frequencies and amplitudes
-		positive_frequencies = frequencies[:len(frequencies) // 2]
-		positive_amplitudes = np.abs(tokens_fft[:len(tokens_fft) // 2])
-
-		# Find FFT peaks
-		peaks, _ = find_peaks(positive_amplitudes[1:])
-		num_peaks = len(peaks)
-		peak_amplitude = np.max(positive_amplitudes[1:][peaks]) if num_peaks > 0 else None
-		dominant_frequency = (
-			positive_frequencies[peaks[np.argmax(positive_amplitudes[1:][peaks])]]
-			if num_peaks > 0 else None
-		)
-
-		# Calculate dynamic cutoff
-		dynamic_cutoff_signal = (
-			max(np.median(tokens_signal) - (peak_amplitude or 0), np.percentile(tokens_signal, 10))
-			if num_peaks > 0 else np.percentile(tokens_signal, 10)
-		)
-		dynamic_cutoff_original_scale = max(dynamic_cutoff_signal, min_tokens)
-
-		# Perform relative peak detection
-		prominence = prominence or np.std(tokens_signal) * 0.1
-		distance = distance or max(1, len(tokens_signal) // 20)
-		relative_peaks, relative_properties = find_peaks(tokens_signal, prominence=prominence, distance=distance)
-		relative_num_peaks = len(relative_peaks)
-		avg_prominence = np.mean(relative_properties["prominences"]) if relative_num_peaks > 0 else None
-
-		# Calculate autocorrelation
-		autocorr = np.correlate(tokens_signal, tokens_signal, mode='full')
-		max_autocorr = np.max(autocorr[len(autocorr) // 2:])
-
-		# Signal envelope
-		upper_envelope = np.max(np.abs(tokens_signal))
-		lower_envelope = -upper_envelope
-
-		# Spectral features
-		spectral_magnitude = np.sum(positive_amplitudes)
-		spectral_centroid = (
-			np.sum(positive_frequencies * positive_amplitudes) / spectral_magnitude
-			if spectral_magnitude > 0 else None
-		)
-		spectral_bandwidth = (
-			np.sqrt(np.sum((positive_frequencies - spectral_centroid) ** 2 * positive_amplitudes) / spectral_magnitude)
-			if spectral_centroid else None
-		)
-
-		# Logging (controlled by `verbose`)
-		if verbose:
-			console.print(f"[bright_cyan]Metrics for {use_signal_type}[/bright_cyan]")
-			console.print(f"Signal Length: {len(tokens_signal)}")
-			console.print(f"Signal Mean: {np.mean(tokens_signal):.2f}, Std: {np.std(tokens_signal):.2f}")
-			console.print(f"Dominant Frequency: {dominant_frequency}")
-			console.print(f"Dynamic Cutoff: {dynamic_cutoff_original_scale}")
-			console.print(f"Number of Peaks: {num_peaks}")
-			console.print(f"Peak Amplitude: {peak_amplitude}")
-			console.print(f"Relative Peaks: {relative_num_peaks}")
-			console.print(f"Average Prominence: {avg_prominence}")
-			console.print(f"Max Autocorrelation: {max_autocorr}")
-			console.print(f"Spectral Centroid: {spectral_centroid}")
-			console.print(f"Spectral Bandwidth: {spectral_bandwidth}")
-			console.print(f"Upper Envelope: {upper_envelope}")
-			console.print(f"Lower Envelope: {lower_envelope}")
-			console.print(f"Spectral Magnitude: {spectral_magnitude}")
-
-		return {
-			"signal_type": use_signal_type,
-			"dominant_frequency": dominant_frequency,
-			"dynamic_cutoff": dynamic_cutoff_original_scale,
-			"num_peaks": num_peaks,
-			"peak_amplitude": peak_amplitude,
-			"relative_num_peaks": relative_num_peaks,
-			"avg_prominence": avg_prominence,
-			"max_autocorrelation": max_autocorr,
-			"upper_envelope": upper_envelope,
-			"lower_envelope": lower_envelope,
-			"spectral_centroid": spectral_centroid,
-			"spectral_bandwidth": spectral_bandwidth,
-			"spectral_magnitude": spectral_magnitude,
-			"positive_frequencies": positive_frequencies,
-			"positive_amplitudes": positive_amplitudes,
-		}
-	except Exception as e:
-		console.print(f"[bright_red]Error calculating metrics for {use_signal_type}: {e}[/bright_red]")
-		return {}
-
-## DWT, CWT, and SWT EVALUATION FUNCTIONS
-
-def determine_scales(signal_length: int, max_scale: int = 128, dynamic: bool = True) -> np.ndarray:
-	"""
-	Determine wavelet scales dynamically based on signal length. This is useful for CWT.
-
-	Parameters:
-	-----------
-	signal_length : int
-		Length of the signal to analyze.
-	max_scale : int
-		Maximum scale to consider.
-	dynamic : bool
-		Whether to calculate scales dynamically based on the signal length.
-
-	Returns:
-	--------
-	scales : np.ndarray
-		Array of scales for the wavelet transform.
-	"""
-	if dynamic:
-		# Use half the signal length or cap at max_scale
-		scales = np.arange(1, min(signal_length // 2, max_scale))
-	else:
-		# Use a predefined range of scales
-		scales = np.arange(1, max_scale)
-	return scales
-
-def evaluate_dwt_performance(signal: np.ndarray, wavelets: list, modes: list, signal_type: str) -> tuple:
-	"""
-	Evaluate DWT wavelet decomposition using MSE, energy-to-entropy ratio, and sparsity for a given signal type.
-
-	Parameters:
-	-----------
-	signal : np.ndarray
-		Signal to analyze (raw or smoothed tokens).
-	wavelets : list of str
-		List of wavelet names to test.
-	modes : list of str
-		List of signal extension modes to test.
-	signal_type : str
-		The type of signal being analyzed ('raw' or 'smoothed').
-
-	Returns:
-	--------
-	tuple:
-		- total_results: pd.DataFrame
-		  DataFrame containing wavelet analysis results.
-		- skipped_wavelets_df: pd.DataFrame
-		  DataFrame containing skipped wavelets.
-	"""
-	results = []
-	skipped_wavelets = []
-	for wavelet in tqdm(wavelets, desc=f"Testing Wavelets for {signal_type}"):
-		try:
-			wavelet_filter_len = pywt.Wavelet(wavelet).dec_len
-			if len(signal) < wavelet_filter_len:
-				raise ValueError(f"Signal is too short for wavelet {wavelet}")
-
-			max_level = pywt.dwt_max_level(len(signal), filter_len=wavelet_filter_len)
-			for level in range(1, max_level + 1):
-				for mode in modes:
-					try:
-						# Decompose signal
-						coeffs = pywt.wavedec(signal, wavelet, level=level, mode=mode)
-						# Check if all coefficient lengths are consistent
-						coeff_shapes = [len(c) for c in coeffs]
-						if len(set(coeff_shapes)) > 1:
-							skipped_wavelets.append({'wavelet': wavelet, 'level': level, 'mode': mode, 'coeff_shapes': coeff_shapes, 'error': "Inconsistent coefficient lengths", 'signal_length': len(signal), 'signal_type': signal_type})
-							continue
-						# Reconstruct signal
-						reconstructed_signal = pywt.waverec(coeffs, wavelet, mode=mode)[:len(signal)]
-
-						# Compute Metrics
-						mse = np.mean((signal - reconstructed_signal) ** 2)
-						psnr_value = psnr(signal, reconstructed_signal, data_range=np.max(signal) - np.min(signal))
-					   
-						energy_entropy = energy_entropy_ratio(coeffs)
-						sparsity, threshold  = adaptive_sparsity_measure(coeffs)
-												# Compute additional features inline
-						additional_features = compute_additional_wavelet_features(coeffs, reconstructed_signal, signal)
-						results.append({
-							'signal_type': signal_type,
-							'wavelet': wavelet,
-							'wavelet_level': level,
-							'wavelet_mode': mode,
-							'wavelet_mse': mse,
-							'wavelet_psnr': psnr_value,
-							'wavelet_energy_entropy': energy_entropy,
-							'wavelet_sparsity': sparsity,
-							'wavelet_threshold': threshold,
-							'signal_length': len(signal)
-							**additional_features
-						})
-					except ValueError as e:
-						skipped_wavelets.append({'wavelet': wavelet, 'level': level, 'mode': mode, 'error': str(e), 'signal_length': len(signal), 'signal_type': signal_type})
-		except Exception as e:
-			skipped_wavelets.append({'wavelet': wavelet, 'level': None, 'mode': None, 'error': str(e), 'signal_length': len(signal), 'signal_type': signal_type})
-
-	skipped_wavelets_df = pd.DataFrame(skipped_wavelets)
-	console.print(f"Skipped wavelets: {len(skipped_wavelets_df)}", style="bright_red")
-	total_results = pd.DataFrame(results)
-	console.print(f"Total DWT results: {len(total_results)}", style="bright_green")
-	return total_results, skipped_wavelets_df
-
-def evaluate_cwt_performance(signal: np.ndarray, wavelets: list, signal_type: str, max_scale: int = 128, dynamic_scales: bool = True) -> tuple:
-	"""
-	Evaluate Continuous Wavelet Transform (CWT) using MSE, energy-to-entropy ratio, and sparsity for a given signal type.
-
-	Parameters:
-	-----------
-	signal : np.ndarray
-		Signal to analyze (raw or smoothed tokens).
-	wavelets : list of str
-		List of wavelet names to test.
-	signal_type : str
-		The type of signal being analyzed ('raw' or 'smoothed').
-	max_scale : int
-		Maximum scale to consider for the wavelet transform.
-	dynamic_scales : bool
-		Whether to determine scales dynamically based on the signal length.
-
-	Returns:
-	--------
-	total_results : pd.DataFrame
-		DataFrame containing wavelet analysis results.
-	skipped_results : pd.DataFrame
-		DataFrame containing skipped wavelets.
-	"""
-	# Dynamically determine scales
-	scales = determine_scales(len(signal), max_scale=max_scale, dynamic=dynamic_scales)
-	
-	results = []
-	skipped_results = []
-	
-	for wavelet in tqdm(wavelets, desc=f"Testing CWT Wavelets for {signal_type}"):
-		try:
-			# Perform Continuous Wavelet Transform
-			coeffs, _ = pywt.cwt(signal, scales=scales, wavelet=wavelet)
-			
-			# Compute reconstructed signal (summed across scales)
-			reconstructed_signal = np.sum(coeffs, axis=0)
-			
-			# Compute PSNR
-			psnr_value = psnr(signal, reconstructed_signal, data_range=np.max(signal) - np.min(signal))
-			
-			# Compute Metrics
-			total_energy = np.sum(coeffs ** 2)
-			entropy = -np.sum(coeffs ** 2 / total_energy * np.log2(coeffs ** 2 / total_energy + 1e-12), axis=None)
-			energy_entropy = total_energy / entropy if entropy > 0 else np.inf
-
-			# Use adaptive sparsity measure
-			sparsity, adaptive_threshold = adaptive_sparsity_measure(coeffs)
-			
-			# Compute additional features (optional)
-			additional_features = compute_additional_wavelet_features(coeffs, reconstructed_signal, signal)
-
-			# Append Results
-			results.append({
-				'signal_type': signal_type,
-				'wavelet': wavelet,
-				'wavelet_energy_entropy': energy_entropy,
-				'wavelet_sparsity': sparsity,
-				'adaptive_threshold': adaptive_threshold,  # Save adaptive threshold
-				'wavelet_psnr': psnr_value,
-				'signal_length': len(signal),
-				'scales_used': len(scales),  # Number of scales used for reference
-				**additional_features
-			})
-		except Exception as e:
-			skipped_results.append({'wavelet': wavelet, 'error': str(e), 'signal_length': len(signal), 'signal_type': signal_type, 'scales_used': len(scales)})
-	
-	total_results = pd.DataFrame(results)
-	
-	metrics = ['wavelet_energy_entropy', 'wavelet_sparsity']
-	subset_results = total_results.replace([np.inf, -np.inf], np.nan).dropna(subset=metrics).reset_index(drop=True)
-	console.print(f"Total CWT results: {len(subset_results)}", style="bright_green")
-	
-	error_results = total_results[~total_results.index.isin(subset_results.index)]
-	skipped_results_df = pd.DataFrame(skipped_results)
-	combined_skipped_results = pd.concat([error_results, skipped_results_df], ignore_index=True)
-	console.print(f"Skipped CWT results: {len(combined_skipped_results)}", style="bright_red")
-	
-	return total_results, combined_skipped_results
-
-def evaluate_swt_performance(signal: np.ndarray, wavelets: list, signal_type: str, max_level: int = 5) -> tuple:
+def filter_wavelets(wavelets: list, exclude_complex: bool = True) -> list:
     """
-    Evaluate Stationary Wavelet Transform (SWT) using adaptive sparsity, energy-to-entropy ratio, PSNR, and additional features for a given signal type.
+    Filter out complex-valued wavelets if needed.
 
     Parameters:
     -----------
-    signal : np.ndarray
-        Signal to analyze (raw or smoothed tokens).
-    wavelets : list of str
+    wavelets : list
         List of wavelet names to test.
-    signal_type : str
-        The type of signal being analyzed ('raw' or 'smoothed').
-    max_level : int
-        Maximum decomposition level for SWT.
-    
+    exclude_complex : bool
+        Whether to exclude complex-valued wavelets.
+
     Returns:
     --------
-    total_results : pd.DataFrame
-        DataFrame containing wavelet analysis results.
-    skipped_results : pd.DataFrame
-        DataFrame containing skipped wavelets.
+    filtered_wavelets : list
+        List of filtered wavelets.
     """
-    # Determine max level dynamically if not provided
-    if max_level is None:
-        predefined_max_level = 10
-        max_level = min(int(np.floor(np.log2(len(signal)))), predefined_max_level)
-        console.print(f"Using dynamic max level: {max_level} for signal length: {len(signal)}", style="bright_blue")
-
-    results = []
-    skipped_wavelets = []
-
-    for wavelet in tqdm(wavelets, desc=f"Testing SWT Wavelets for {signal_type}"):
-        try:
-            # Decompose signal using SWT
-            coeffs = pywt.swt(signal, wavelet=wavelet, level=max_level)
-            approx_coeffs, detail_coeffs = zip(*coeffs)  # Separate approximation and detail coefficients
-            
-            # Compute reconstructed signal for SWT
-            reconstructed_signal = np.sum([approx_coeffs[-1]] + list(detail_coeffs), axis=0)
-
-            # Compute PSNR
-            wavelet_psnr = psnr(signal, reconstructed_signal, data_range=np.max(signal) - np.min(signal))
-
-            # Compute Metrics
-            total_energy = np.sum([np.sum(np.array(c) ** 2) for c in detail_coeffs])
-            entropy = -np.sum(
-                [np.sum(np.array(c) ** 2 / total_energy * np.log2(np.array(c) ** 2 / total_energy + 1e-12)) 
-                 for c in detail_coeffs]
-            )
-            energy_entropy = total_energy / (entropy if entropy > 0 else np.inf)
-
-            # Use adaptive sparsity measure
-            sparsity, adaptive_threshold = adaptive_sparsity_measure(detail_coeffs)
-
-            # Compute additional features
-            additional_features = compute_additional_wavelet_features(coeffs, reconstructed_signal, signal)
-
-            # Append results
-            results.append({
-                'signal_type': signal_type,
-                'wavelet': wavelet,
-                'wavelet_energy_entropy': energy_entropy,
-                'wavelet_sparsity': sparsity,
-                'adaptive_threshold': adaptive_threshold,  # Save adaptive threshold
-                'wavelet_psnr': wavelet_psnr,
-                'signal_length': len(signal),
-                'decomposition_levels': max_level,
-                **additional_features
-            })
-        except Exception as e:
-            skipped_wavelets.append({
-                'wavelet': wavelet,
-                'error': str(e),
-                'signal_length': len(signal),
-                'signal_type': signal_type,
-                'decomposition_levels': max_level
-            })
-
-    # Create DataFrame for results and skipped wavelets
-    total_results = pd.DataFrame(results)
-    skipped_results = pd.DataFrame(skipped_wavelets)
-
-    # Replace inf values and drop rows with missing metrics
-    metrics = ['wavelet_energy_entropy', 'wavelet_sparsity']
-    total_results = total_results.replace([np.inf, -np.inf], np.nan).dropna(subset=metrics).reset_index(drop=True)
-
-    console.print(f"Total SWT results: {len(total_results)}", style="bright_green")
-    console.print(f"Skipped SWT results: {len(skipped_results)}", style="bright_red")
-    
-    return total_results, skipped_results
-
-## WAVELET RANKING AND COMPARISON FUNCTIONS
+    complex_wavelets = ['cgau1', 'cgau2', 'cgau3', 'cgau4', 'cgau5', 'cgau6', 'cgau7']
+    if exclude_complex:
+        filtered_wavelets = [w for w in wavelets if w not in complex_wavelets]
+        console.print(f"[yellow]Excluding complex-valued wavelets: {complex_wavelets}[/yellow]")
+        return filtered_wavelets
+    return wavelets
 
 def determine_best_wavelet_representation(
 	results_df: pd.DataFrame, signal_type: str, weights: dict = None, is_combined: bool = False
@@ -762,8 +208,7 @@ def determine_best_wavelet_representation(
 
 	# Handle zero variance or invalid metrics
 	if 'wavelet_sparsity' in results_df.columns and results_df['wavelet_sparsity'].nunique() == 1:
-		console.print(f"[yellow]Dropping 'wavelet_sparsity' due to zero variance.[/yellow]")
-		results_df = results_df.drop(columns=['wavelet_sparsity'])
+		console.print(f"[yellow]Excluding 'wavelet_sparsity' from analysis due to zero variance.[/yellow]")
 		weights.pop('wavelet_sparsity', None)
 
 	# Log-transform extreme values in 'wavelet_energy_entropy'
@@ -800,33 +245,44 @@ def determine_best_wavelet_representation(
 	) / normalized_df[[f"{prefix}{metric}_norm" for metric in metrics]].std().replace(0, np.nan)
 
 	# Compute combined scores
-	normalized_df[f"{prefix}wavelet_norm_combined_score"] = sum(
-		weights.get(metric, 0) * normalized_df[f"{prefix}{metric}_norm"] for metric in metrics
-	)
-	normalized_df[f"{prefix}wavelet_zscore_combined_score"] = sum(
-		weights.get(metric, 0) * normalized_df[f"{prefix}{metric}_zscore"] for metric in metrics
+	normalized_df[f"{prefix}wavelet_norm_score"] = normalized_df.apply(
+		lambda row: sum(weights[metric] * row[metric] for metric in metrics if pd.notna(row[metric])),
+		axis=1
 	)
 
+	normalized_df[f"{prefix}wavelet_zscore_score"] = normalized_df.apply(
+		lambda row: sum(weights[metric] * row[f"{metric}_zscore"] for metric in metrics if pd.notna(row[f"{prefix}{metric}_zscore"])),
+		axis=1
+	)
+
+	normalized_df[f"{prefix}correlation_norm_score"] = normalized_df[f'{prefix}wavelet_norm_score'].corr(normalized_df[f'{prefix}wavelet_zscore_score'])
+
+	normalized_df[f"{prefix}variability_score"] = (
+    normalized_df[f"{prefix}wavelet_norm_score"] - 0.1 * normalized_df[f"{prefix}wavelet_zscore_score"]
+)
 	# Rank results
 	ranked_results = normalized_df.sort_values(
-		by=f"{prefix}wavelet_norm_combined_score", ascending=False
+		by=f"{prefix}variability_score", ascending=False
 	).reset_index(drop=True)
 	ranked_results[f"{prefix}wavelet_rank"] = ranked_results.index + 1
 
 	# Correlation between normalized and z-score combined scores
-	correlation_norm_zscore = ranked_results[
-		[f"{prefix}wavelet_norm_combined_score", f"{prefix}wavelet_zscore_combined_score"]
+	overall_correlation_norm_zscore = ranked_results[
+		[f"{prefix}wavelet_norm_score", f"{prefix}wavelet_zscore_score"]
 	].corr().iloc[0, 1]
 
 	# Return the best configuration, rankings, and correlation
 	best_config = ranked_results[0:1]
-	return best_config, ranked_results, correlation_norm_zscore
+	return best_config, ranked_results, overall_correlation_norm_zscore
 
 def compare_and_rank_wavelet_metrics(
 	raw_signal: np.ndarray, 
-	smoothed_signal: np.ndarray, 
-	weights: dict = None
-) -> tuple:
+	smoothed_signal: np.ndarray,
+	wavelet_directory: str,
+	volume_id: str, 
+	use_parallel: bool = False,
+	weights: dict = None,
+) -> pd.DataFrame:
 	"""
 	Compare wavelet metrics for raw and smoothed tokens and determine the best representation.
 
@@ -836,24 +292,19 @@ def compare_and_rank_wavelet_metrics(
 		Raw tokens per page.
 	smoothed_signal : np.ndarray
 		Smoothed tokens per page.
+	wavelet_directory : str
+		Directory containing wavelet analysis results.
+	volume_id : str
+		Volume identifier for saving results.
 	weights : dict, optional
 		Weights for metrics (default uses standard weights for MSE, Energy-to-Entropy, and Sparsity).
+	use_parallel : bool, optional
+		Whether to use parallel processing for wavelet analysis.
 
 	Returns:
 	--------
-	tuple:
-		- ranked_combined_results: pd.DataFrame
-		  DataFrame containing combined wavelet analysis results.
-		- best_combined_results: pd.Series
-		  Series containing the best combined wavelet configuration.
-		- combined_correlation_score: float
-		  Correlation between normalized and zscored combined scores.
-		- dwt_combined_skipped_results: pd.DataFrame
-		  DataFrame containing skipped DWT wavelets.
-		- cwt_combined_skipped_results: pd.DataFrame
-		  DataFrame containing skipped CWT wavelets.
-		- swt_combined_skipped_results: pd.DataFrame
-		  DataFrame containing skipped SWT wavelets.
+	best_combined_results: pd.DataFrame
+		  DataFrame containing the best combined wavelet configuration.
 	"""
 	if weights is None:
 		weights = {
@@ -869,13 +320,19 @@ def compare_and_rank_wavelet_metrics(
 		}
 
 	dwt_wavelets = pywt.wavelist(kind='discrete')
-	cwt_wavelets = pywt.wavelist(kind='continuous')
+	cwt_wavelets = filter_wavelets(pywt.wavelist(kind='continuous'))
 	modes = pywt.Modes.modes
+
+	file_path = wavelet_directory + f"/{volume_id.replace('.', '_')}_"
 
 	# Evaluate metrics for DWT
 	try:
-		dwt_raw_results, dwt_raw_skipped_results = evaluate_dwt_performance(raw_signal, dwt_wavelets, modes, 'raw')
-		dwt_smoothed_results, dwt_smoothed_skipped_results = evaluate_dwt_performance(smoothed_signal, dwt_wavelets, modes, 'smoothed')
+		if use_parallel:
+			dwt_raw_results, dwt_raw_skipped_results = evaluate_dwt_performance_parallel(raw_signal, dwt_wavelets, modes, 'raw')
+			dwt_smoothed_results, dwt_smoothed_skipped_results = evaluate_dwt_performance_parallel(smoothed_signal, dwt_wavelets, modes, 'smoothed')
+		else:
+			dwt_raw_results, dwt_raw_skipped_results = evaluate_dwt_performance(raw_signal, dwt_wavelets, modes, 'raw')
+			dwt_smoothed_results, dwt_smoothed_skipped_results = evaluate_dwt_performance(smoothed_signal, dwt_wavelets, modes, 'smoothed')
 	except Exception as e:
 		console.print(f"[bright_red]Error evaluating DWT: {e}[/bright_red]")
 		dwt_raw_results = dwt_smoothed_results = pd.DataFrame()
@@ -883,8 +340,12 @@ def compare_and_rank_wavelet_metrics(
 
 	# Evaluate metrics for CWT
 	try:
-		cwt_raw_results, cwt_raw_skipped_results = evaluate_cwt_performance(raw_signal, cwt_wavelets, 'raw')
-		cwt_smoothed_results, cwt_smoothed_skipped_results = evaluate_cwt_performance(smoothed_signal, cwt_wavelets, 'smoothed')
+		if use_parallel:
+			cwt_raw_results, cwt_raw_skipped_results = evaluate_cwt_performance_parallel(raw_signal, cwt_wavelets, 'raw')
+			cwt_smoothed_results, cwt_smoothed_skipped_results = evaluate_cwt_performance_parallel(smoothed_signal, cwt_wavelets, 'smoothed')
+		else:
+			cwt_raw_results, cwt_raw_skipped_results = evaluate_cwt_performance(raw_signal, cwt_wavelets, 'raw')
+			cwt_smoothed_results, cwt_smoothed_skipped_results = evaluate_cwt_performance(smoothed_signal, cwt_wavelets, 'smoothed')
 	except Exception as e:
 		console.print(f"[bright_red]Error evaluating CWT: {e}[/bright_red]")
 		cwt_raw_results = cwt_smoothed_results = pd.DataFrame()
@@ -892,8 +353,12 @@ def compare_and_rank_wavelet_metrics(
 
 	# Evaluate metrics for SWT
 	try:
-		swt_raw_results, swt_raw_skipped_results = evaluate_swt_performance(raw_signal, dwt_wavelets, 'raw')
-		swt_smoothed_results, swt_smoothed_skipped_results = evaluate_swt_performance(smoothed_signal, dwt_wavelets, 'smoothed')
+		if use_parallel:
+			swt_raw_results, swt_raw_skipped_results = evaluate_swt_performance_parallel(raw_signal, dwt_wavelets, 'raw')
+			swt_smoothed_results, swt_smoothed_skipped_results = evaluate_swt_performance_parallel(smoothed_signal, dwt_wavelets, 'smoothed')
+		else:
+			swt_raw_results, swt_raw_skipped_results = evaluate_swt_performance(raw_signal, dwt_wavelets, 'raw')
+			swt_smoothed_results, swt_smoothed_skipped_results = evaluate_swt_performance(smoothed_signal, dwt_wavelets, 'smoothed')
 	except Exception as e:
 		console.print(f"[bright_red]Error evaluating SWT: {e}[/bright_red]")
 		swt_raw_results = swt_smoothed_results = pd.DataFrame()
@@ -902,32 +367,44 @@ def compare_and_rank_wavelet_metrics(
 	# Combine results
 	dwt_combined_results = pd.concat([dwt_raw_results, dwt_smoothed_results], ignore_index=True)
 	dwt_combined_skipped_results = pd.concat([dwt_raw_skipped_results, dwt_smoothed_skipped_results], ignore_index=True)
+	if not dwt_combined_skipped_results.empty:
+		dwt_combined_skipped_results.to_csv(f"{file_path}dwt_skipped_results.csv", index=False)
 	cwt_combined_results = pd.concat([cwt_raw_results, cwt_smoothed_results], ignore_index=True)
 	cwt_combined_skipped_results = pd.concat([cwt_raw_skipped_results, cwt_smoothed_skipped_results], ignore_index=True)
+	if not cwt_combined_skipped_results.empty:
+		cwt_combined_skipped_results.to_csv(f"{file_path}cwt_skipped_results.csv", index=False)
 	swt_combined_results = pd.concat([swt_raw_results, swt_smoothed_results], ignore_index=True)
 	swt_combined_skipped_results = pd.concat([swt_raw_skipped_results, swt_smoothed_skipped_results], ignore_index=True)
+	if not swt_combined_skipped_results.empty:
+		swt_combined_skipped_results.to_csv(f"{file_path}swt_skipped_results.csv", index=False)
 
 	# Ensure results are non-empty before ranking
 	if not dwt_combined_results.empty:
 		best_dwt, ranked_dwt, dwt_correlation_score = determine_best_wavelet_representation(dwt_combined_results, "DWT", weights, False)
 		ranked_dwt['wavelet_type'] = 'DWT'
+		ranked_dwt.to_csv(f"{file_path}dwt_results.csv", index=False)
+		if not best_dwt.empty:
+			generate_table(best_dwt[['wavelet', 'signal_type', 'wavelet_rank', 'wavelet_norm_score', 'correlation_norm_zscore']], f"Best DWT Wavelet Configuration (Correlation: {dwt_correlation_score:.2f})")
 	else:
 		ranked_dwt = pd.DataFrame()
-		dwt_correlation_score = None
 
 	if not cwt_combined_results.empty:
 		best_cwt, ranked_cwt, cwt_correlation_score = determine_best_wavelet_representation(cwt_combined_results, "CWT", weights, False)
 		ranked_cwt['wavelet_type'] = 'CWT'
+		ranked_cwt.to_csv(f"{file_path}cwt_results.csv", index=False)
+		if not best_cwt.empty:
+			generate_table(best_cwt[['wavelet', 'signal_type', 'wavelet_rank', 'wavelet_norm_score', 'correlation_norm_zscore']], f"Best CWT Wavelet Configuration (Correlation: {cwt_correlation_score:.2f})")
 	else:
 		ranked_cwt = pd.DataFrame()
-		cwt_correlation_score = None
 
 	if not swt_combined_results.empty:
 		best_swt, ranked_swt, swt_correlation_score = determine_best_wavelet_representation(swt_combined_results, "SWT", weights, False)
 		ranked_swt['wavelet_type'] = 'SWT'
+		ranked_swt.to_csv(f"{file_path}swt_results.csv", index=False)
+		if not best_swt.empty:
+			generate_table(best_swt[['wavelet', 'signal_type', 'wavelet_rank','wavelet_norm_score', 'correlation_norm_zscore']], f"Best SWT Wavelet Configuration (Correlation: {swt_correlation_score:.2f})")
 	else:
 		ranked_swt = pd.DataFrame()
-		swt_correlation_score = None
 
 	# Combine DWT, CWT, and SWT results
 	combined_results = pd.concat([ranked_dwt, ranked_cwt, ranked_swt], ignore_index=True)
@@ -937,22 +414,13 @@ def compare_and_rank_wavelet_metrics(
 		best_combined_results, ranked_combined_results, combined_correlation_score = determine_best_wavelet_representation(
 			combined_results, "Combined", weights, True
 		)
+		ranked_combined_results.to_csv(f"{file_path}combined_results.csv", index=False)
+		if not best_combined_results.empty:
+			generate_table(best_combined_results[['wavelet', 'signal_type', 'combined_wavelet_rank','combined_wavelet_norm_score', 'combined_correlation_norm_zscore']], f"Best Combined Wavelet Configuration (Correlation: {combined_correlation_score:.2f})")
 	else:
-		ranked_combined_results = pd.DataFrame()
 		best_combined_results = None
-		combined_correlation_score = None
 
-	# Display results
-	if not ranked_dwt.empty:
-		generate_table(best_dwt, f"Best DWT Wavelet Configuration (Correlation: {dwt_correlation_score:.2f})")
-	if not ranked_cwt.empty:
-		generate_table(best_cwt, f"Best CWT Wavelet Configuration (Correlation: {cwt_correlation_score:.2f})")
-	if not ranked_swt.empty:
-		generate_table(best_swt, f"Best SWT Wavelet Configuration (Correlation: {swt_correlation_score:.2f})")
-	if not ranked_combined_results.empty:
-		generate_table(best_combined_results, f"Best Combined Wavelet Configuration (Correlation: {combined_correlation_score:.2f})")
-
-	return ranked_combined_results, best_combined_results, combined_correlation_score, dwt_combined_skipped_results, cwt_combined_skipped_results, swt_combined_skipped_results
+	return best_combined_results
 
 ## PLOTTING FUNCTIONS
 
@@ -1060,13 +528,131 @@ def plot_annotated_periodicals(merged_expanded_df, grouped_df, output_dir, perio
 
 ## MAIN FUNCTIONS
 
-def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: str) -> pd.DataFrame:
+def generate_signal_processing_data_parallel(volume_paths_df: pd.DataFrame, output_dir: str, should_use_parallel: bool) -> pd.DataFrame:
+    """
+    Parallelized generation of signal processing data for multiple volumes.
+
+    Parameters:
+    -----------
+    volume_paths_df : pd.DataFrame
+        DataFrame containing volume metadata and file paths.
+    output_dir : str
+        Directory to save output files and results.
+
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with aggregated results for all processed volumes.
+    """
+    def process_volume(volume):
+        """
+        Process a single volume for wavelet and signal analysis.
+        """
+        try:
+            # Process tokens and signals
+            merged_expanded_df, grouped_df, tokens_raw_signal, tokens_smoothed_signal = process_tokens(
+                volume['file_path'],
+                volume['is_annotated_periodical'],
+                volume['should_filter_greater_than_numbers'],
+                volume['should_filter_implied_zeroes'],
+            )
+
+            # Perform wavelet analysis
+            wavelet_results_df, best_wavelet_config, combined_wavelet_correlation, dwt_skipped, cwt_skipped, swt_skipped = compare_and_rank_wavelet_metrics(
+                tokens_raw_signal, tokens_smoothed_signal, should_use_parallel
+            )
+
+            # Calculate signal metrics
+            signal_metrics_results = []
+            for signal_type, signal in {
+                "raw": merged_expanded_df['tokens_per_page'].values,
+                "smoothed": merged_expanded_df['smoothed_tokens_per_page'].values,
+            }.items():
+                result = calculate_signal_metrics(
+                    tokens_signal=signal,
+                    use_signal_type=signal_type,
+                    min_tokens=merged_expanded_df['tokens_per_page'].min(),
+                    prominence=1.0,
+                    distance=5,
+                    verbose=False,
+                )
+                signal_metrics_results.append(result)
+            signal_metrics_df = pd.DataFrame(signal_metrics_results)
+
+            # Annotate and plot issues for annotated periodicals
+            missing_issues, chart = [], None
+            if volume['is_annotated_periodical'] and len(grouped_df) > 1:
+                missing_issues, chart = plot_annotated_periodicals(
+                    merged_expanded_df,
+                    grouped_df,
+                    output_dir,
+                    volume['lowercase_periodical_name'],
+                    signal_metrics_df.iloc[0].get('raw_dynamic_cutoff', 0),
+                )
+
+            # Collect results
+            best_wavelet_dict = best_wavelet_config.iloc[0].to_dict()
+            return {
+                "htid": merged_expanded_df['htid'].unique()[0],
+                "lowercase_periodical_name": volume['lowercase_periodical_name'],
+                "avg_tokens": merged_expanded_df['tokens_per_page'].mean(),
+                "avg_digits": merged_expanded_df['digits_per_page'].mean(),
+                "raw_likely_covers": merged_expanded_df[merged_expanded_df['tokens_per_page'] <= signal_metrics_df.iloc[0].get('raw_dynamic_cutoff', 0)].page_number.tolist(),
+                "wavelet_correlation": combined_wavelet_correlation,
+                "wavelet_results_df": wavelet_results_df,
+                "dwt_skipped": dwt_skipped,
+                "cwt_skipped": cwt_skipped,
+                "swt_skipped": swt_skipped,
+                "missing_issues": missing_issues,
+                "chart": chart,
+            }
+        except Exception as e:
+            return {"error": str(e), "volume": volume}
+
+    # Prepare for parallel processing
+    volume_paths = volume_paths_df.to_dict(orient="records")
+    results = []
+    max_workers = min(len(volume_paths), multiprocessing.cpu_count() - 1)
+    console.print(f"[cyan]Using {max_workers} workers for parallel processing.[/cyan]")
+
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(process_volume, volume) for volume in volume_paths]
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing volumes"):
+            try:
+                result = future.result()
+                if "error" not in result:
+                    results.append(result)
+                else:
+                    console.print(f"[red]Error in volume: {result['error']}[/red]")
+            except Exception as e:
+                console.print(f"[red]Unexpected error during volume processing: {e}[/red]")
+
+    # Aggregate results
+    processed_volumes = pd.DataFrame(results)
+    console.print(f"[green]Successfully processed {len(processed_volumes)} volumes.[/green]")
+
+    # Handle Altair charts
+    altair_charts = [result["chart"] for result in results if result.get("chart")]
+    if altair_charts:
+        combined_charts = alt.vconcat(*altair_charts)
+        save_chart(
+            combined_charts, f"{output_dir}/annotated_tokens_per_page/{volume_paths_df['lowercase_periodical_name'].iloc[0]}_tokens_per_page_chart.png", scale_factor=2.0
+        )
+
+    # Save to CSV
+    processed_volumes.to_csv(os.path.join(output_dir, "processed_volumes.csv"), index=False)
+
+    return processed_volumes
+
+def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: str, should_use_parallel: bool, rerun_data: bool) -> pd.DataFrame:
 	"""
 	Generate embeddings for each volume in the given DataFrame.
 
 	Parameters:
 	- volume_paths_df: DataFrame containing volume paths.
 	- output_dir: Directory to save the embeddings.
+	- should_use_parallel: Whether to use parallel processing.
+	- rerun_data: Whether to rerun the data processing.
 
 	Returns:
 	- volume_frequencies: List of volume frequencies.
@@ -1083,9 +669,20 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 			volume['should_filter_greater_than_numbers'], 
 			volume['should_filter_implied_zeroes']
 		)
+		# Extract the directory path without the CSV file
+		directory_path = os.path.dirname(volume['file_path'])
+
+		# Create the new directory path for wavelet_analysis
+		wavelet_analysis_dir = os.path.join(directory_path, 'wavelet_analysis')
+
+		if rerun_data and os.path.exists(wavelet_analysis_dir):
+			shutil.rmtree(wavelet_analysis_dir)
+
+		# Create the wavelet_analysis directory if it doesn't exist
+		os.makedirs(wavelet_analysis_dir, exist_ok=True)
 		# Calculate wavelet metrics and signal metrics
-		wavelet_results_df, best_wavelet_config, combined_wavelet_correlation, dwt_skipped_results, cwt_skipped_results, swt_skipped_results = compare_and_rank_wavelet_metrics(
-			tokens_raw_signal, tokens_smoothed_signal
+		best_wavelet_config = compare_and_rank_wavelet_metrics(
+			tokens_raw_signal, tokens_smoothed_signal, wavelet_analysis_dir, volume['htid'], should_use_parallel
 		)
 		signal_types = {
 			"raw": merged_expanded_df['tokens_per_page'].values,
@@ -1143,7 +740,6 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 
 		# Append frequencies and metadata
 		volume_data = {
-			'wavelet_correlation': combined_wavelet_correlation,
 			'htid': merged_expanded_df['htid'].unique()[0],
 			'lowercase_periodical_name': volume['lowercase_periodical_name'],
 			'avg_tokens': merged_expanded_df['tokens_per_page'].mean(),
@@ -1161,45 +757,40 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 			'volume_classification': volume['volume_classification'],
 			'title_classification': volume['title_classification'],
 		}
-		volume_df = pd.DataFrame([volume_data])
-		volume_df = volume_df.drop(columns=['tokens_per_page', 'page_numbers', 'digits_per_page'])
+		
 		# Merge the best_wavelet_dict with volume_data
 		volume_data.update(best_wavelet_dict)
 		volume_data.update(merged_signals_dict)
 		# Append to the list of volume frequencies
 		volume_frequencies.append(volume_data)
-		# Merge the full wavelet results with the signal metrics
-		merged_signal_analysis_df = pd.merge(wavelet_results_df, signal_metrics_df, on='signal_type', how='left')
-		# Drop the positive frequencies and amplitudes
-		merged_signal_analysis_df = merged_signal_analysis_df.drop(columns=['positive_frequencies', 'positive_amplitudes'])
-		# Concat the full wavelet results to the volume data and store as CSV
-		repeated_volume_df = pd.concat([volume_df] * len(merged_signal_analysis_df), ignore_index=True)
+		volume_df = pd.DataFrame([volume_data])
+		volume_df = volume_df.drop(columns=['tokens_per_page', 'page_numbers', 'digits_per_page'])
+		# merged_volume_df 
+		# # Merge the full wavelet results with the signal metrics
+		# merged_signal_analysis_df = pd.merge(wavelet_results_df, signal_metrics_df, on='signal_type', how='left')
+		# # Drop the positive frequencies and amplitudes
+		# merged_signal_analysis_df = merged_signal_analysis_df.drop(columns=['positive_frequencies', 'positive_amplitudes'])
+		# # Concat the full wavelet results to the volume data and store as CSV
+		# repeated_volume_df = pd.concat([volume_df] * len(merged_signal_analysis_df), ignore_index=True)
 
-		full_wavelet_results = pd.concat([repeated_volume_df, merged_signal_analysis_df], axis=1)
+		# full_wavelet_results = pd.concat([repeated_volume_df, merged_signal_analysis_df], axis=1)
 
-		# Extract the directory path without the CSV file
-		directory_path = os.path.dirname(volume['file_path'])
+		
 
-		# Create the new directory path for wavelet_analysis
-		wavelet_analysis_dir = os.path.join(directory_path, 'wavelet_analysis')
+		wavelet_results_file_path = wavelet_analysis_dir + f"/{volume['htid'].replace('.', '_')}_wavelet_volume_results.csv"
+		volume_df.to_csv(wavelet_results_file_path, index=False)
 
-		# Create the wavelet_analysis directory if it doesn't exist
-		os.makedirs(wavelet_analysis_dir, exist_ok=True)
+		# skipped_dwts_file_path = wavelet_analysis_dir + f"/{volume['htid']}_skipped_dwts.csv"
+		# if len(dwt_skipped_results) > 0:
+		# 	dwt_skipped_results.to_csv(skipped_dwts_file_path, index=False)
 
-		wavelet_results_file_path = wavelet_analysis_dir + f"/{volume['htid']}_wavelet_results.csv"
-		full_wavelet_results.to_csv(wavelet_results_file_path, index=False)
+		# skipped_cwts_file_path = wavelet_analysis_dir + f"/{volume['htid']}_skipped_cwts.csv"
+		# if len(cwt_skipped_results) > 0:
+		# 	cwt_skipped_results.to_csv(skipped_cwts_file_path, index=False)
 
-		skipped_dwts_file_path = wavelet_analysis_dir + f"/{volume['htid']}_skipped_dwts.csv"
-		if len(dwt_skipped_results) > 0:
-			dwt_skipped_results.to_csv(skipped_dwts_file_path, index=False)
-
-		skipped_cwts_file_path = wavelet_analysis_dir + f"/{volume['htid']}_skipped_cwts.csv"
-		if len(cwt_skipped_results) > 0:
-			cwt_skipped_results.to_csv(skipped_cwts_file_path, index=False)
-
-		skipped_swts_file_path = wavelet_analysis_dir + f"/{volume['htid']}_skipped_swts.csv"
-		if len(swt_skipped_results) > 0:
-			swt_skipped_results.to_csv(skipped_swts_file_path, index=False)
+		# skipped_swts_file_path = wavelet_analysis_dir + f"/{volume['htid']}_skipped_swts.csv"
+		# if len(swt_skipped_results) > 0:
+		# 	swt_skipped_results.to_csv(skipped_swts_file_path, index=False)
 
 
 	# Create DataFrame from volume frequencies
@@ -1222,7 +813,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 
 	return volume_frequencies_df
 
-def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, should_filter_implied_zeroes: bool, only_use_annotated_periodicals: bool, rerun_code: bool = False):
+def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, should_filter_implied_zeroes: bool, only_use_annotated_periodicals: bool, load_existing_data: bool = False, rerun_analysis: bool = True, should_use_parallel: bool = False) -> pd.DataFrame:
 	"""
 	Generate token frequency analysis for all identified HathiTrust periodicals.
 
@@ -1230,7 +821,9 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 	- should_filter_greater_than_numbers: Flag indicating whether to filter out numbers greater than the max possible page number.
 	- should_filter_implied_zeroes: Flag indicating whether to filter out implied zeroes.
 	- only_use_annotated_periodicals: Flag indicating whether to process only annotated periodicals.
-	- rerun_code: Flag indicating whether to rerun the code.
+	- load_existing_data: Whether to load existing code.
+	- rerun_analysis: Whether to rerun the analysis.
+	- should_use_parallel: Whether to use parallel processing.
 	"""
 
 	# Count the number of matching files
@@ -1247,11 +840,11 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 
 	volume_features_output_path = os.path.join("..", "datasets", "all_volume_features_and_frequencies.csv")
 	volume_features_exist = False
-	if os.path.exists(volume_features_output_path) and rerun_code:
+	if os.path.exists(volume_features_output_path) and load_existing_data:
 		volume_features_df = read_csv_file(volume_features_output_path)
 		volume_features_exist = True
 		console.print(f"Found {len(volume_features_df)} existing volume features.", style="bright_green")
-	elif os.path.exists(volume_features_output_path) and not rerun_code:
+	elif os.path.exists(volume_features_output_path) and not load_existing_data:
 		#delete the file
 		os.remove(volume_features_output_path)
 		volume_features_df = pd.DataFrame()
@@ -1283,7 +876,7 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 			if volume_features_exist:
 				processed_htid = row.volume_directory.replace("_", ".")
 				volume_in_features = volume_features_df[volume_features_df['htid'] == processed_htid].copy()
-				if (len(volume_in_features) > 0) and (not rerun_code):
+				if (len(volume_in_features) > 0) and (not load_existing_data):
 					console.print(f"Volume {row.volume_directory} already exists in volume features..", style="bright_yellow")
 					continue
 
@@ -1314,7 +907,7 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 			continue
 
 		volume_paths_df = pd.DataFrame(volume_paths)
-		volume_frequencies = generate_signal_processing_data(volume_paths_df, output_dir="../figures")
+		volume_frequencies = generate_signal_processing_data(volume_paths_df, output_dir="../figures", should_use_parallel=should_use_parallel, rerun_data=rerun_analysis)
 		# Drop amplitutde and frequency columns for saving file space
 		volume_frequencies = volume_frequencies.drop(columns=['raw_positive_frequencies', 'raw_positive_amplitudes', 'smoothed_positive_frequencies', 'smoothed_positive_amplitudes', 'tokens_per_page', 'page_numbers', 'digits_per_page'])
 		# Save volume frequencies to CSV
@@ -1326,6 +919,8 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 if __name__ == "__main__":
 	filter_greater_than_numbers = True
 	filter_implied_zeroes = True
-	should_rerun_code = False
+	should_rerun_code = True
+	should_load_existing_data = False
 	should_only_use_annotated_periodicals = False
-	generate_token_frequency_analysis(filter_greater_than_numbers, filter_implied_zeroes,  should_only_use_annotated_periodicals, should_rerun_code)
+	parallelization = True
+	generate_token_frequency_analysis(filter_greater_than_numbers, filter_implied_zeroes,  should_only_use_annotated_periodicals, should_load_existing_data, should_rerun_code, parallelization)
