@@ -14,7 +14,7 @@ import multiprocessing
 from tqdm import tqdm
 from rich.console import Console
 import pywt
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import RobustScaler
 from skimage.metrics import peak_signal_noise_ratio as psnr
 
 # Local application imports
@@ -157,6 +157,51 @@ def filter_wavelets(wavelets: list, exclude_complex: bool = True) -> list:
 		return filtered_wavelets
 	return wavelets
 
+def normalize_weights_dynamically(metrics: list, weights: dict, results_df: pd.DataFrame) -> dict:
+	"""
+	Normalize weights dynamically by separating metrics into shared and specific categories.
+
+	Parameters:
+	-----------
+	metrics : list
+		List of metric names to consider.
+	weights : dict
+		Dictionary of initial weights for each metric.
+	results_df : pd.DataFrame
+		DataFrame containing the results with metrics.
+
+	Returns:
+	--------
+	normalized_weights : dict
+		Dictionary of normalized weights adjusted for shared and specific metrics.
+	"""
+	# Determine shared and specific metrics
+	threshold = 0.9  # Define a threshold for "majority presence" (e.g., 90% of rows)
+	total_rows = len(results_df)
+	shared_metrics = [
+		metric for metric in metrics
+		if metric in weights and results_df[metric].notna().sum() / total_rows >= threshold
+	]
+	specific_metrics = [metric for metric in metrics if metric not in shared_metrics and metric in weights]
+
+	# Calculate total weights for each bucket
+	shared_total_weight = sum(weights[metric] for metric in shared_metrics)
+	specific_total_weight = sum(weights[metric] for metric in specific_metrics)
+
+	# Normalize weights within each bucket
+	normalized_weights = {}
+	shared_weight_factor = 0.7  # Adjust this factor to prioritize shared metrics
+	specific_weight_factor = 0.3  # Remaining weight for specific metrics
+
+	for metric in shared_metrics:
+		normalized_weights[metric] = (weights[metric] / shared_total_weight) * shared_weight_factor
+
+	for metric in specific_metrics:
+		normalized_weights[metric] = (weights[metric] / specific_total_weight) * specific_weight_factor
+
+	# Return normalized weights
+	return normalized_weights
+
 def determine_best_wavelet_representation(
 	results_df: pd.DataFrame, signal_type: str, weights: dict = None, is_combined: bool = False
 ) -> tuple:
@@ -182,8 +227,6 @@ def determine_best_wavelet_representation(
 		DataFrame with combined scores and rankings.
 	subset_ranked_results : pd.DataFrame
 		DataFrame with combined scores and rankings for top configurations by wavelet, signal type, and wavelet type.
-	correlation_norm_zscore : float
-		Correlation between normalized and z-scored combined scores.
 	"""
 	console.print(f"Results for {signal_type} Wavelet Analysis")
 
@@ -201,14 +244,9 @@ def determine_best_wavelet_representation(
 			'variance_ratio_across_levels': 0.1,
 			'emd_value': 0.2,
 			'kl_divergence': 0.2,
+			'scales_used': 0.1,
+			'decomposition_levels': 0.1,
 		}
-
-	# Adjust weights based on specific metrics (e.g., SWT and CWT)
-	if 'wavelet_type' in results_df.columns:
-		if signal_type == 'CWT' and 'scales_used' in results_df.columns:
-			weights['scales_used'] = 0.1
-		if signal_type == 'SWT' and 'decomposition_levels' in results_df.columns:
-			weights['decomposition_levels'] = 0.1
 
 	# Handle zero variance or invalid metrics
 	if 'wavelet_sparsity' in results_df.columns and results_df['wavelet_sparsity'].nunique() == 1:
@@ -216,7 +254,7 @@ def determine_best_wavelet_representation(
 		weights.pop('wavelet_sparsity', None)
 
 	# Log-transform extreme values in 'wavelet_energy_entropy'
-	if 'wavelet_energy_entropy' in results_df.columns:
+	if 'wavelet_energy_entropy' in results_df.columns and results_df['wavelet_energy_entropy'].min() < 0:
 		results_df['wavelet_energy_entropy'] = np.log1p(np.abs(results_df['wavelet_energy_entropy']))
 
 	# Handle complex-valued metrics
@@ -224,10 +262,10 @@ def determine_best_wavelet_representation(
 		console.print(f"[yellow]Converting {column} to magnitudes due to complex values.[/yellow]")
 		results_df[column] = np.abs(results_df[column])
 
-	# Normalize metrics
+	# Normalize metrics with RobustScaler for stability
 	metrics = [col for col in weights.keys() if col in results_df.columns]
 	normalized_df = results_df.copy()
-	scaler = MinMaxScaler()
+	scaler = RobustScaler()
 	prefix = 'combined_' if is_combined else ''
 
 	for metric in metrics:
@@ -237,81 +275,101 @@ def determine_best_wavelet_representation(
 			console.print(f"[bright_red]Error normalizing '{metric}': {e}. Skipping this metric.[/bright_red]")
 			metrics.remove(metric)
 
-
 	# Invert metrics where lower is better
-	if 'wavelet_mse' in metrics:
-		normalized_df[f"{prefix}wavelet_mse_norm"] = 1 - normalized_df[f"{prefix}wavelet_mse_norm"]
-	if 'wavelet_entropy' in metrics:
-		normalized_df[f"{prefix}wavelet_entropy_norm"] = 1 - normalized_df[f"{prefix}wavelet_entropy_norm"]
-	if 'variance_ratio_across_levels' in metrics:
-		normalized_df[f"{prefix}variance_ratio_across_levels_norm"] = 1 - normalized_df[f"{prefix}variance_ratio_across_levels_norm"]
-	if 'emd_value' in metrics:
-		normalized_df[f"{prefix}emd_value_norm"] = 1 - normalized_df[f"{prefix}emd_value_norm"]
-	if 'kl_divergence' in metrics:
-		normalized_df[f"{prefix}kl_divergence_norm"] = 1 - normalized_df[f"{prefix}kl_divergence_norm"]
+	invert_metrics = ['wavelet_mse', 'wavelet_entropy', 'variance_ratio_across_levels', 'emd_value', 'kl_divergence']
+	for metric in invert_metrics:
+		if metric in metrics:
+			normalized_df[f"{prefix}{metric}_norm"] = 1 - normalized_df[f"{prefix}{metric}_norm"]
 
-	if is_combined:
-		normalized_df['missing_metrics_count'] = normalized_df.apply(
-			lambda row: sum(1 for metric in metrics if pd.isna(row[metric])),
-			axis=1
-		)
 	# Compute z-scores
-	normalized_df[[f"{prefix}{metric}_zscore" for metric in metrics]] = (
-		normalized_df[[f"{prefix}{metric}_norm" for metric in metrics]] - 
-		normalized_df[[f"{prefix}{metric}_norm" for metric in metrics]].mean()
-	) / normalized_df[[f"{prefix}{metric}_norm" for metric in metrics]].std().replace(0, np.nan)
+	for metric in metrics:
+		metric_norm_col = f"{prefix}{metric}_norm"
+		metric_zscore_col = f"{prefix}{metric}_zscore"
+		
+		std_dev = normalized_df[metric_norm_col].std()  # Calculate standard deviation
+		if std_dev == 0 or pd.isna(std_dev):  # Handle cases with zero or NaN standard deviation
+			console.print(f"[yellow]Standard deviation for {metric_norm_col} is zero or NaN. Skipping z-score calculation.[/yellow]")
+			normalized_df[metric_zscore_col] = np.nan
+		else:
+			normalized_df[metric_zscore_col] = (
+				normalized_df[metric_norm_col] - normalized_df[metric_norm_col].mean()
+			) / std_dev
 
-	# Compute combined scores
-	normalized_df[f"{prefix}wavelet_norm_score"] = normalized_df.apply(
-		lambda row: sum(weights[metric] * row[metric] for metric in metrics if pd.notna(row[metric])),
+	# Count missing metrics
+	normalized_df[f'{prefix}missing_metrics_count'] = normalized_df.apply(
+		lambda row: sum(1 for metric in metrics if pd.isna(row[f"{prefix}{metric}_norm"])),
 		axis=1
 	)
 
-	normalized_df[f"{prefix}wavelet_zscore_score"] = normalized_df.apply(
-		lambda row: sum(weights[metric] * row[f"{metric}_zscore"] for metric in metrics if pd.notna(row[f"{prefix}{metric}_zscore"])),
+	# Normalize weights
+	normalized_weights = normalize_weights_dynamically(metrics, weights, normalized_df)
+
+	# Compute weighted scores for norm and z-score
+	penalty_weight = 0.05  # Adjust penalty weight as needed
+	normalized_df[f"{prefix}wavelet_norm_weighted_score"] = normalized_df.apply(
+		lambda row: (
+			sum(
+				normalized_weights[metric] * row[f"{prefix}{metric}_norm"]
+				for metric in metrics
+				if pd.notna(row[f"{prefix}{metric}_norm"])
+			) / sum(normalized_weights[metric] for metric in metrics if pd.notna(row[f"{prefix}{metric}_norm"]))
+			- penalty_weight * row['missing_metrics_count']
+		),
+		axis=1
+	)
+	normalized_df[f"{prefix}wavelet_zscore_weighted_score"] = normalized_df.apply(
+		lambda row: (
+			sum(
+				normalized_weights[metric] * row[f"{prefix}{metric}_zscore"]
+				for metric in metrics
+				if pd.notna(row[f"{prefix}{metric}_zscore"])
+			)
+		),
 		axis=1
 	)
 
+	# Calculate normalized diff
 	normalized_df[f"{prefix}normalized_diff"] = (
-		(normalized_df[f"{prefix}wavelet_norm_score"] - normalized_df[f"{prefix}wavelet_zscore_score"]).abs() /
-		(normalized_df[f"{prefix}wavelet_norm_score"] + normalized_df[f"{prefix}wavelet_zscore_score"]).abs()
+		(normalized_df[f"{prefix}wavelet_norm_weighted_score"] - normalized_df[f"{prefix}wavelet_zscore_weighted_score"]).abs()
+		/ (normalized_df[f"{prefix}wavelet_norm_weighted_score"] + normalized_df[f"{prefix}wavelet_zscore_weighted_score"]).abs()
 	)
 
-	normalized_df[f"{prefix}stability_adjusted_score"] = (
-		normalized_df[f"{prefix}wavelet_norm_score"] 
-		- 0.1 * normalized_df[f"{prefix}wavelet_zscore_score"] 
-		- 0.05 * normalized_df[f"{prefix}normalized_diff"]
+	# Final stability-adjusted score
+	stability_penalty_weight = 0.05  # Adjust based on impact observed
+	normalized_df[f"{prefix}final_score"] = (
+		normalized_df[f"{prefix}wavelet_norm_weighted_score"]
+		- stability_penalty_weight * normalized_df[f"{prefix}normalized_diff"]
 	)
+
 	# Rank results
 	ranked_results = normalized_df.sort_values(
-		by=f"{prefix}stability_adjusted_score", ascending=False
+		by=f"{prefix}final_score", ascending=False
 	).reset_index(drop=True)
 	ranked_results[f"{prefix}wavelet_rank"] = ranked_results.index + 1
+
 	# Dynamically select the top N% of ranked results
 	percentage_of_results = 0.1  # Adjust percentage as needed
 	num_top_results = max(1, int(len(ranked_results) * percentage_of_results))  # At least one result
 	top_ranked_results = ranked_results.head(num_top_results)
+
 	# Select top configurations by wavelet, signal type, and wavelet type
 	grouping_cols = ['wavelet_type', 'wavelet'] if is_combined else ['wavelet']
 	grouped = ranked_results.groupby(grouping_cols)
 
 	subset_ranked_results = grouped.apply(
-        lambda group: group.loc[group[f"{prefix}stability_adjusted_score"].idxmax()]
-    ).reset_index(drop=True)
+		lambda group: group.loc[group[f"{prefix}final_score"].idxmax()]
+	).reset_index(drop=True)
 
 	final_ranked_results = pd.concat([top_ranked_results, subset_ranked_results], ignore_index=True).drop_duplicates()
-	# Rerank subset results
 	final_ranked_results = final_ranked_results.sort_values(
-		by=f"{prefix}stability_adjusted_score", ascending=False
+		by=f"{prefix}final_score", ascending=False
 	).reset_index(drop=True)
 	final_ranked_results[f"{prefix}final_wavelet_rank"] = final_ranked_results.index + 1
-	# Correlation between normalized and z-score combined scores
-	overall_correlation_norm_zscore = ranked_results[
-		[f"{prefix}wavelet_norm_score", f"{prefix}wavelet_zscore_score"]
+	overall_correlation_norm_zscore = final_ranked_results[
+		[f"{prefix}wavelet_norm_weighted_score", f"{prefix}wavelet_zscore_weighted_score"]
 	].corr().iloc[0, 1]
-
 	# Return the best configuration, rankings, and correlation
-	best_config = ranked_results[0:1]
+	best_config = final_ranked_results.iloc[0:1]
 	return best_config, ranked_results, final_ranked_results, overall_correlation_norm_zscore
 
 def compare_and_rank_wavelet_metrics(
@@ -422,13 +480,14 @@ def compare_and_rank_wavelet_metrics(
 		swt_combined_skipped_results.to_csv(f"{file_path}swt_skipped_results.csv", index=False)
 
 	# Ensure results are non-empty before ranking
+	table_cols = ['wavelet_rank', 'final_wavelet_rank', 'final_score', 'wavelet_norm_weighted_score', 'normalized_diff', 'wavelet_zscore_weighted_score', 'missing_metrics_count']
 	if not dwt_combined_results.empty:
 		best_dwt, ranked_dwt, subset_ranked_dwt, dwt_correlation_score = determine_best_wavelet_representation(dwt_combined_results, "DWT", weights, False)
 		subset_ranked_dwt['wavelet_type'] = 'DWT'
 		ranked_dwt.to_csv(f"{file_path}full_dwt_results.csv", index=False)
 		subset_ranked_dwt.to_csv(f"{file_path}subset_dwt_results.csv", index=False)
 		if not best_dwt.empty:
-			generate_table(best_dwt[['wavelet', 'signal_type', 'wavelet_rank', 'stability_adjusted_score', 'wavelet_norm_score', 'wavelet_zscore_score','normalized_diff']], f"Best DWT Wavelet Configuration (Correlation: {dwt_correlation_score:.2f})")
+			generate_table(best_dwt[ ['wavelet', 'signal_type'] + table_cols], f"Best DWT Wavelet Configuration (Correlation: {dwt_correlation_score:.2f})")
 	else:
 		subset_ranked_dwt = pd.DataFrame()
 
@@ -438,7 +497,7 @@ def compare_and_rank_wavelet_metrics(
 		ranked_cwt.to_csv(f"{file_path}full_cwt_results.csv", index=False)
 		subset_ranked_cwt.to_csv(f"{file_path}subset_cwt_results.csv", index=False)
 		if not best_cwt.empty:
-			generate_table(best_cwt[['wavelet', 'signal_type', 'wavelet_rank', 'stability_adjusted_score', 'wavelet_norm_score', 'wavelet_zscore_score','normalized_diff']], f"Best CWT Wavelet Configuration (Correlation: {cwt_correlation_score:.2f})")
+			generate_table(best_cwt[['wavelet', 'signal_type'] + table_cols], f"Best CWT Wavelet Configuration (Correlation: {cwt_correlation_score:.2f})")
 	else:
 		subset_ranked_cwt = pd.DataFrame()
 
@@ -448,13 +507,13 @@ def compare_and_rank_wavelet_metrics(
 		ranked_swt.to_csv(f"{file_path}full_swt_results.csv", index=False)
 		subset_ranked_swt.to_csv(f"{file_path}subset_swt_results.csv", index=False)
 		if not best_swt.empty:
-			generate_table(best_swt[['wavelet', 'signal_type', 'wavelet_rank', 'stability_adjusted_score', 'wavelet_norm_score', 'wavelet_zscore_score','normalized_diff']], f"Best SWT Wavelet Configuration (Correlation: {swt_correlation_score:.2f})")
+			generate_table(best_swt[['wavelet', 'signal_type'] + table_cols], f"Best SWT Wavelet Configuration (Correlation: {swt_correlation_score:.2f})")
 	else:
 		subset_ranked_swt = pd.DataFrame()
 
 	# Combine DWT, CWT, and SWT results
 	combined_results = pd.concat([subset_ranked_dwt, subset_ranked_cwt, subset_ranked_swt], ignore_index=True)
-
+	table_cols = ['combined_' + col for col in table_cols]
 	# Determine overall best representation
 	if not combined_results.empty:
 		best_combined_results, ranked_combined_results, subset_ranked_combined_results, combined_correlation_score = determine_best_wavelet_representation(
@@ -463,7 +522,7 @@ def compare_and_rank_wavelet_metrics(
 		ranked_combined_results.to_csv(f"{file_path}combined_results.csv", index=False)
 		subset_ranked_combined_results.to_csv(f"{file_path}subset_combined_results.csv", index=False)
 		if not best_combined_results.empty:
-			generate_table(best_combined_results[['wavelet', 'signal_type', 'combined_wavelet_rank', 'combined_stability_adjusted_score', 'wavelet_norm_score', 'combined_wavelet_zscore_score','combined_normalized_diff']], f"Best Combined Wavelet Configuration (Correlation: {combined_correlation_score:.2f})")
+			generate_table(best_combined_results[['wavelet', 'signal_type', 'wavelet_type'] + table_cols], f"Best Combined Wavelet Configuration (Correlation: {combined_correlation_score:.2f})")
 	else:
 		best_combined_results = None
 
