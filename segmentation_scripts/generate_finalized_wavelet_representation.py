@@ -84,7 +84,7 @@ def compute_wavelet_scores(df, is_combined, rank_bins=[0, 10, 20, 50, 100, None]
 	
 	# Normalize rank and stability
 	df[f'{prefix}normalized_rank'] = df['combined_final_wavelet_rank'] / df['combined_final_wavelet_rank'].max()
-	df[f'{prefix}normalized_stability'] = 1 - df[f'{prefix}rank_stability']
+	df[f'{prefix}normalized_stability'] = 1 - df[f'rank_stability']
 
 	# Define weights for rank and stability
 	alpha = 0.5  # Weight for rank
@@ -108,8 +108,8 @@ def compute_wavelet_scores(df, is_combined, rank_bins=[0, 10, 20, 50, 100, None]
 	rank_bin_summary = df.groupby(['wavelet_family', f'{prefix}rank_bin']).agg(
 		count=('combined_final_wavelet_rank', 'count'),
 		unique_htid=('htid', 'nunique'),  # Count of unique volumes (htid)
-		mean_rank_stability=(f'{prefix}rank_stability', 'mean'),  # Mean rank stability
-		std_rank_stability=(f'{prefix}rank_stability', 'std')  # Standard deviation of rank stability
+		binned_mean_rank_stability=(f'rank_stability', 'mean'),  # Mean rank stability
+		binned_std_rank_stability=(f'rank_stability', 'std')  # Standard deviation of rank stability
 	).reset_index()
 
 	# Add proportions
@@ -117,13 +117,12 @@ def compute_wavelet_scores(df, is_combined, rank_bins=[0, 10, 20, 50, 100, None]
 	rank_bin_summary[f'{prefix}htid_proportion'] = rank_bin_summary['unique_htid'] / rank_bin_summary.groupby(f'{prefix}rank_bin')['unique_htid'].transform('sum')
 
 	top10_metrics = rank_bin_summary[rank_bin_summary[f'{prefix}rank_bin'] == 'Top 10'].sort_values(by=[f'{prefix}global_proportion', f'{prefix}htid_proportion', 'mean_rank_stability', 'std_rank_stability', 'count', 'unique_htid'], ascending=[False, False, False, True, False, False])
-	top_wavelet_family = top10_metrics.iloc[0].wavelet_family
 
 	# Aggregate metrics based on the level
 	wavelet_summary = df.groupby('wavelet_family').agg(
 		mean_composite_score=(f'{prefix}composite_score', 'mean'),
-		mean_rank_stability=(f'{prefix}rank_stability', 'mean'),
-		std_rank_stability=(f'{prefix}rank_stability', 'std'),
+		mean_rank_stability=(f'rank_stability', 'mean'),
+		std_rank_stability=(f'rank_stability', 'std'),
 		mean_rank=('combined_final_wavelet_rank', 'mean'),
 		total_count=('htid', 'count')
 	).reset_index()
@@ -149,8 +148,12 @@ def compute_wavelet_scores(df, is_combined, rank_bins=[0, 10, 20, 50, 100, None]
 
 	# Select the best wavelet
 	top_wavelet_family = wavelet_summary.iloc[0]
-	console.print(f"Best wavelet family: {top_wavelet_family.wavelet_family}")
-	return wavelet_summary, top_wavelet_family, rank_bin_summary
+	console.print(f"Best wavelet family: {top_wavelet_family.wavelet_family}", style="bright_magenta")
+
+	final_df = df.merge(rank_bin_summary, on=['wavelet_family', f'{prefix}rank_bin'], how='left')
+	final_df[f'{prefix}top_wavelet_family'] = top_wavelet_family
+	final_df = final_df.sort_values(by=[f'{prefix}composite_score'], ascending=[False])
+	return final_df
 
 
 def generate_finalized_wavelets():
@@ -186,8 +189,6 @@ def generate_finalized_wavelets():
 			subset_frequencies_df = all_frequencies_df[all_frequencies_df.htid == individual_htid]
 			console.print(f"Processed {len(subset_frequencies_df)} frequencies for {individual_htid}.", style="bright_green")
 
-	
-
 			subset_combined_results_path = os.path.join(data_directory_path, "HathiTrust-pcc-datasets", "datasets", individual_publication_directory, "volumes", individual_volume_directory, "wavelet_analysis", individual_volume_directory + "_subset_combined_results.csv")
 			if os.path.exists(subset_combined_results_path):
 				subset_combined_results_df = pd.read_csv(subset_combined_results_path)
@@ -204,6 +205,7 @@ def generate_finalized_wavelets():
 					console.print(f"Could not find {wavelet_volume_data_path}.", style="bright_red")
 	
 			if not wavelet_volume_data_df.empty and not subset_combined_results_df.empty:
+				
 				shared_cols = set(subset_combined_results_df.columns).intersection(set(wavelet_volume_data_df.columns))
 				avoid_cols = [col for col in wavelet_volume_data_df.columns if not col in shared_cols]
 				final_cols = avoid_cols + ['htid']
@@ -211,16 +213,28 @@ def generate_finalized_wavelets():
 				subset_combined_results_df['wavelet_family'] = subset_combined_results_df['wavelet'].str.extract(r'([a-zA-Z]+)')
 
 				subset_combined_results_df = calculate_rank_stability(subset_combined_results_df, rank_columns)
-
-				wavelet_summary, top_wavelet_family, rank_bin_summary = compute_wavelet_scores(subset_combined_results_df, is_combined=False)				
-				finalized_subset_combined_results_df = subset_combined_results_df.merge(rank_bin_summary, on=['wavelet_family', 'individual_volume_rank_bin'], how='left')
-				finalized_subset_combined_results_df['individual_volume_top_wavelet_family'] = top_wavelet_family
-				volume_dfs.append(finalized_subset_combined_results_df)
+	
+				finalized_subset_combined_results_df = compute_wavelet_scores(subset_combined_results_df, is_combined=False)
+				if finalized_subset_combined_results_df is not None:
+					# Save the finalized subset combined results
+					finalized_subset_outputh_path = os.path.join(data_directory_path, "HathiTrust-pcc-datasets", "datasets", individual_publication_directory, "volumes", individual_volume_directory, "wavelet_analysis", individual_volume_directory + "_finalized_subset_combined_results.csv")	
+					finalized_subset_combined_results_df.to_csv(finalized_subset_outputh_path, index=False)
+					volume_dfs.append(finalized_subset_combined_results_df)
 			# Combine all volume data for the title into one DataFrame
 		# Combine all volumes for the title
 		combined_volume_df = pd.concat(volume_dfs, ignore_index=True)
 
 		# Compute wavelet scores for the combined title
-		wavelet_summary, top_wavelet_family, rank_bin_summary = compute_wavelet_scores(combined_volume_df, is_combined=True)
-		finalized_combined_results_df = combined_volume_df.merge(rank_bin_summary, on=['wavelet_family', 'all_volumes_rank_bin'], how='left')
-		finalized_combined_results_df['all_volumes', 'top_wavelet_family'] = top_wavelet_family
+		final_combined_volume_df = compute_wavelet_scores(combined_volume_df, is_combined=True)
+		if final_combined_volume_df is not None:
+			# Save the finalized combined results
+			finalized_combined_output_path = os.path.join(data_directory_path, "HathiTrust-pcc-datasets", "datasets", individual_publication_directory, "derived_data", "wavelet_analysis", periodical_title + "_finalized_combined_results.csv")
+			os.makedirs(os.path.dirname(finalized_combined_output_path), exist_ok=True)	
+			final_combined_volume_df.to_csv(finalized_combined_output_path, index=False)
+			console.print(f"Saved finalized combined results for {periodical_title} to {finalized_combined_output_path}.", style="bright_green")
+
+
+		subset_final_combined_volume_df
+
+if __name__ == "__main__":
+	generate_finalized_wavelets()
