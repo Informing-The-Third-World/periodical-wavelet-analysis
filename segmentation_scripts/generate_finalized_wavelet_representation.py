@@ -26,30 +26,6 @@ sys.path.append("..")
 from segmentation_scripts.utils import read_csv_file, get_data_directory_path, generate_table
 from segmentation_scripts.generate_token_frequency_signal_processing_analysis import process_tokens
 
-def select_top_wavelet(subset_combined_results_df):
-	 
-	# Add rank bins to the data
-	subset_combined_results_df['rank_bin'] = pd.cut(
-	subset_combined_results_df['combined_final_wavelet_rank'],
-	bins=[0, 10, 20, 50, 100, subset_combined_results_df['combined_final_wavelet_rank'].max()],
-	labels=['Top 10', 'Top 20', 'Top 50', 'Top 100', 'Beyond 100']
-)
-	# Normalize rank and rank stability
-	subset_combined_results_df['normalized_rank'] = subset_combined_results_df['combined_final_wavelet_rank'] / subset_combined_results_df['combined_final_wavelet_rank'].max()
-	subset_combined_results_df['normalized_stability'] = 1 - subset_combined_results_df['rank_stability']  # Penalize instability
-
-	# Define weights for rank and stability
-	alpha = 0.5  # Weight for rank
-	beta = 0.5   # Weight for stability
-
-	# Compute composite score
-	subset_combined_results_df['composite_score'] = (
-		alpha * subset_combined_results_df['normalized_rank'] + 
-		beta * subset_combined_results_df['normalized_stability']
-	)
-
-	# Sort by composite score (ascending)
-	sorted_results = subset_combined_results_df.sort_values(by='composite_score', ascending=True)
 
 def calculate_rank_stability(df, rank_columns):
 	"""
@@ -82,7 +58,7 @@ def calculate_rank_stability(df, rank_columns):
 	
 	return df
 
-def compute_wavelet_scores(df, is_combined, rank_bins=[0, 10, 20, 50, 100, None], weights=None):
+def compute_wavelet_scores(df, is_combined, rank_bins=[0, 10, 20, 50, 100, None],):
 	"""
 	Computes wavelet scores for either individual volumes or combined titles.
 
@@ -103,18 +79,8 @@ def compute_wavelet_scores(df, is_combined, rank_bins=[0, 10, 20, 50, 100, None]
 	Returns:
 	- Processed DataFrame with calculated scores and rankings.
 	"""
-	# Set default weights if none are provided
-	if weights is None:
-		weights = {
-			'composite_score': 0.3,
-			'rank_stability': 0.25,
-			'mean_rank': 0.15,
-			'total_count': 0.1,
-			'global_proportion': 0.1,
-			'htid_proportion': 0.1
-		}
 
-	prefix = 'final_' if is_combined else ''
+	prefix = 'all_volumes_' if is_combined else 'individual_volume_'
 	
 	# Normalize rank and stability
 	df[f'{prefix}normalized_rank'] = df['combined_final_wavelet_rank'] / df['combined_final_wavelet_rank'].max()
@@ -147,17 +113,17 @@ def compute_wavelet_scores(df, is_combined, rank_bins=[0, 10, 20, 50, 100, None]
 	).reset_index()
 
 	# Add proportions
-	rank_bin_summary['global_proportion'] = rank_bin_summary['count'] / rank_bin_summary.groupby('rank_bin')['count'].transform('sum')
-	rank_bin_summary['htid_proportion'] = rank_bin_summary['unique_htid'] / rank_bin_summary.groupby('rank_bin')['unique_htid'].transform('sum')
+	rank_bin_summary[f'{prefix}global_proportion'] = rank_bin_summary['count'] / rank_bin_summary.groupby(f'{prefix}rank_bin')['count'].transform('sum')
+	rank_bin_summary[f'{prefix}htid_proportion'] = rank_bin_summary['unique_htid'] / rank_bin_summary.groupby(f'{prefix}rank_bin')['unique_htid'].transform('sum')
 
 	top10_metrics = rank_bin_summary[rank_bin_summary[f'{prefix}rank_bin'] == 'Top 10'].sort_values(by=[f'{prefix}global_proportion', f'{prefix}htid_proportion', 'mean_rank_stability', 'std_rank_stability', 'count', 'unique_htid'], ascending=[False, False, False, True, False, False])
 	top_wavelet_family = top10_metrics.iloc[0].wavelet_family
 
 	# Aggregate metrics based on the level
 	wavelet_summary = df.groupby('wavelet_family').agg(
-		mean_composite_score=('final_composite_score', 'mean'),
-		mean_rank_stability=('rank_stability', 'mean'),
-		std_rank_stability=('rank_stability', 'std'),
+		mean_composite_score=(f'{prefix}composite_score', 'mean'),
+		mean_rank_stability=(f'{prefix}rank_stability', 'mean'),
+		std_rank_stability=(f'{prefix}rank_stability', 'std'),
 		mean_rank=('combined_final_wavelet_rank', 'mean'),
 		total_count=('htid', 'count')
 	).reset_index()
@@ -165,21 +131,26 @@ def compute_wavelet_scores(df, is_combined, rank_bins=[0, 10, 20, 50, 100, None]
 	wavelet_summary = wavelet_summary.merge(top10_metrics, on='wavelet_family', how='left').fillna(0)	
 
 	# Normalize all metrics
-	for col in ['mean_composite_score', 'mean_rank_stability', 'mean_rank', 'total_count', 'global_proportion', 'htid_proportion']:
-		wavelet_summary[f'normalized_{col}'] = wavelet_summary[col] / wavelet_summary[col].max()
+	for col in ['mean_composite_score', 'mean_rank_stability', 'mean_rank', 'total_count', f'{prefix}global_proportion', f'{prefix}htid_proportion']:
+		wavelet_summary[f'{prefix}normalized_{col}'] = wavelet_summary[col] / wavelet_summary[col].max()
 
 	# Compute final composite score
-	wavelet_summary['final_wavelet_composite_score'] = (
-		0.3 * wavelet_summary['normalized_mean_composite_score'] +
-		0.25 * wavelet_summary['normalized_mean_rank_stability'] +
-		0.15 * wavelet_summary['normalized_mean_rank'] +
-		0.1 * wavelet_summary['normalized_total_count'] +
-		0.1 * wavelet_summary['normalized_global_proportion'] +
-		0.1 * wavelet_summary['normalized_htid_proportion']
+	wavelet_summary[f'{prefix}wavelet_composite_score'] = (
+		0.3 * wavelet_summary[f'{prefix}normalized_mean_composite_score'] +
+		0.25 * wavelet_summary[f'{prefix}normalized_mean_rank_stability'] +
+		0.15 * wavelet_summary[f'{prefix}normalized_mean_rank'] +
+		0.1 * wavelet_summary[f'{prefix}normalized_total_count'] +
+		0.1 * wavelet_summary[f'{prefix}normalized_global_proportion'] +
+		0.1 * wavelet_summary[f'{prefix}normalized_htid_proportion']
 	)
 
 	# Sort by final score
-	wavelet_summary = wavelet_summary.sort_values(by='final_wavelet_composite_score', ascending=False)
+	wavelet_summary = wavelet_summary.sort_values(by=f'{prefix}_wavelet_composite_score', ascending=False)
+
+	# Select the best wavelet
+	top_wavelet_family = wavelet_summary.iloc[0]
+	console.print(f"Best wavelet family: {top_wavelet_family.wavelet_family}")
+	return wavelet_summary, top_wavelet_family, rank_bin_summary
 
 
 def generate_finalized_wavelets():
@@ -241,118 +212,15 @@ def generate_finalized_wavelets():
 
 				subset_combined_results_df = calculate_rank_stability(subset_combined_results_df, rank_columns)
 
-				# Normalize rank and rank stability
-				subset_combined_results_df['normalized_rank'] = subset_combined_results_df['combined_final_wavelet_rank'] / subset_combined_results_df['combined_final_wavelet_rank'].max()
-				subset_combined_results_df['normalized_stability'] = 1 - subset_combined_results_df['rank_stability']  # Penalize instability
-
-				# Define weights for rank and stability
-				alpha = 0.5  # Weight for rank
-				beta = 0.5   # Weight for stability
-
-				# Compute composite score
-				subset_combined_results_df['composite_score'] = (
-					alpha * subset_combined_results_df['normalized_rank'] + 
-					beta * subset_combined_results_df['normalized_stability']
-				)
-
-				# Add rank bins to the data
-				subset_combined_results_df['rank_bin'] = pd.cut(
-					subset_combined_results_df['combined_final_wavelet_rank'],
-					bins=[0, 10, 20, 50, 100, subset_combined_results_df['combined_final_wavelet_rank'].max()],
-					labels=['Top 10', 'Top 20', 'Top 50', 'Top 100', 'Beyond 100']
-				)
-
-				# Add unique htid count and stability metrics to the summary
-				rank_bin_summary = subset_combined_results_df.groupby(['wavelet_family', 'rank_bin']).agg(
-					count=('combined_final_wavelet_rank', 'count'),
-					unique_htid=('htid', 'nunique'),  # Count of unique volumes (htid)
-					mean_rank_stability=('rank_stability', 'mean'),  # Mean rank stability
-					std_rank_stability=('rank_stability', 'std')  # Standard deviation of rank stability
-				).reset_index()
-
-				# Total count for each rank_bin
-				bin_totals = rank_bin_summary.groupby('rank_bin')['count'].sum().reset_index()
-				bin_totals.rename(columns={'count': 'total_bin_count'}, inplace=True)
-				rank_bin_summary = rank_bin_summary.merge(bin_totals, on='rank_bin')
-
-				# Total unique htid per rank_bin
-				bin_totals_htid = rank_bin_summary.groupby('rank_bin')['unique_htid'].sum().reset_index()
-				bin_totals_htid.rename(columns={'unique_htid': 'total_bin_unique_htid'}, inplace=True)
-				rank_bin_summary = rank_bin_summary.merge(bin_totals_htid, on='rank_bin')
-
-				# Proportion of all wavelets in each bin (relative to total bin count)
-				rank_bin_summary['global_proportion'] = rank_bin_summary['count'] / rank_bin_summary['total_bin_count']
-
-				# Proportion of unique htid in each bin relative to total unique htid for that bin
-				rank_bin_summary['htid_proportion'] = rank_bin_summary['unique_htid'] / rank_bin_summary['total_bin_unique_htid']
-				rank_bin_summary = rank_bin_summary[rank_bin_summary.rank_bin == 'Top 10'].sort_values(by=['global_proportion', 'htid_proportion', 'mean_rank_stability', 'std_rank_stability', 'count', 'unique_htid'], ascending=[False, False, False, True, False, False])
-				top_wavelet_family = rank_bin_summary.iloc[0].wavelet_family
-				finalized_subset_combined_results_df = subset_combined_results_df.merge(rank_bin_summary, on=['wavelet_family', 'rank_bin'], how='left')
-				finalized_subset_combined_results_df['top_wavelet_family'] = top_wavelet_family
+				wavelet_summary, top_wavelet_family, rank_bin_summary = compute_wavelet_scores(subset_combined_results_df, is_combined=False)				
+				finalized_subset_combined_results_df = subset_combined_results_df.merge(rank_bin_summary, on=['wavelet_family', 'individual_volume_rank_bin'], how='left')
+				finalized_subset_combined_results_df['individual_volume_top_wavelet_family'] = top_wavelet_family
 				volume_dfs.append(finalized_subset_combined_results_df)
 			# Combine all volume data for the title into one DataFrame
 		# Combine all volumes for the title
 		combined_volume_df = pd.concat(volume_dfs, ignore_index=True)
 
-		# Normalize rank and stability
-		combined_volume_df['final_normalized_rank'] = combined_volume_df['combined_final_wavelet_rank'] / combined_volume_df['combined_final_wavelet_rank'].max()
-		combined_volume_df['normalized_stability'] = 1 - combined_volume_df['rank_stability']
-
-		# Composite score for each volume
-		combined_volume_df['final_composite_score'] = (
-			0.5 * combined_volume_df['final_normalized_rank'] +
-			0.5 * combined_volume_df['normalized_stability']
-		)
-
-		# Aggregate metrics for wavelet families
-		wavelet_summary = combined_volume_df.groupby('wavelet_family').agg(
-			mean_composite_score=('final_composite_score', 'mean'),
-			mean_rank_stability=('rank_stability', 'mean'),
-			std_rank_stability=('rank_stability', 'std'),
-			mean_rank=('combined_final_wavelet_rank', 'mean'),
-			total_count=('htid', 'count')
-		).reset_index()
-
-		# Assign rank bins
-		combined_volume_df['rank_bin'] = pd.cut(
-			combined_volume_df['combined_final_wavelet_rank'],
-			bins=[0, 10, 20, 50, 100, combined_volume_df['combined_final_wavelet_rank'].max()],
-			labels=['Top 10', 'Top 20', 'Top 50', 'Top 100', 'Beyond 100']
-		)
-
-		# Rank bin metrics
-		rank_bin_summary = combined_volume_df.groupby(['wavelet_family', 'rank_bin']).agg(
-			count=('combined_final_wavelet_rank', 'count'),
-			unique_htid=('htid', 'nunique'),
-			mean_rank_stability=('rank_stability', 'mean'),
-			std_rank_stability=('rank_stability', 'std')
-		).reset_index()
-
-		# Add proportions
-		rank_bin_summary['global_proportion'] = rank_bin_summary['count'] / rank_bin_summary.groupby('rank_bin')['count'].transform('sum')
-		rank_bin_summary['htid_proportion'] = rank_bin_summary['unique_htid'] / rank_bin_summary.groupby('rank_bin')['unique_htid'].transform('sum')
-
-		# Merge Top 10 metrics into wavelet_summary
-		top10_metrics = rank_bin_summary[rank_bin_summary.rank_bin == 'Top 10'][['wavelet_family', 'global_proportion', 'htid_proportion']]
-		wavelet_summary = wavelet_summary.merge(top10_metrics, on='wavelet_family', how='left').fillna(0)
-
-		# Normalize all metrics
-		for col in ['mean_composite_score', 'mean_rank_stability', 'mean_rank', 'total_count', 'global_proportion', 'htid_proportion']:
-			wavelet_summary[f'normalized_{col}'] = wavelet_summary[col] / wavelet_summary[col].max()
-
-		# Compute final composite score
-		wavelet_summary['final_wavelet_composite_score'] = (
-			0.3 * wavelet_summary['normalized_mean_composite_score'] +
-			0.25 * wavelet_summary['normalized_mean_rank_stability'] +
-			0.15 * wavelet_summary['normalized_mean_rank'] +
-			0.1 * wavelet_summary['normalized_total_count'] +
-			0.1 * wavelet_summary['normalized_global_proportion'] +
-			0.1 * wavelet_summary['normalized_htid_proportion']
-		)
-
-		# Sort by final score
-		wavelet_summary = wavelet_summary.sort_values(by='final_wavelet_composite_score', ascending=False)
-
-		# Select the best wavelet
-		top_wavelet_family = wavelet_summary.iloc[0]
-		print(f"Best wavelet family: {top_wavelet_family.wavelet_family}")
+		# Compute wavelet scores for the combined title
+		wavelet_summary, top_wavelet_family, rank_bin_summary = compute_wavelet_scores(combined_volume_df, is_combined=True)
+		finalized_combined_results_df = combined_volume_df.merge(rank_bin_summary, on=['wavelet_family', 'all_volumes_rank_bin'], how='left')
+		finalized_combined_results_df['all_volumes', 'top_wavelet_family'] = top_wavelet_family
