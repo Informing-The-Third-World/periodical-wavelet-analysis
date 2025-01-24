@@ -17,11 +17,19 @@ def save_chart(chart: alt.Chart, filename: str, scale_factor=2.0) -> None:
 	'''
 	Save an Altair chart using vl-convert
 	
-	:param chart: Altair chart to save
-	:param filename : The path to save the chart to
-	:param scale_factor: int or float
+	Parameters
+	----------
+	chart : alt.Chart
+		The Altair chart to save.
+	filename: str
+		The filename to save the chart as.
+	scale_factor: float, optional
 		The factor to scale the image resolution by.
 		E.g. A value of `2` means two times the default resolution.
+
+	Returns
+	-------
+	None
 	'''
 	with alt.data_transformers.enable("default"), alt.data_transformers.disable_max_rows():
 		if filename.split('.')[-1] == 'svg':
@@ -37,7 +45,14 @@ def set_data_directory_path(path: str) -> None:
 	"""
 	Sets data directory path.
 
-	:param path: Path to data directory
+	Parameters
+	----------
+	path : str
+		The path to set as the data directory.
+
+	Returns
+	-------
+	None
 	"""
 	apikey.save("ITTW_DATA_DIRECTORY_PATH", path)
 	console.print(f'Informing the Third World data directory path set to {path}', style='bold blue')
@@ -46,20 +61,36 @@ def get_data_directory_path() -> str:
 	"""
 	Gets data directory path.
 
-	:return: Data directory path
+	Parameters
+	----------
+	None
+	
+	Returns
+	-------
+	str
+		The data directory path.
 	"""
 	return apikey.load("ITTW_DATA_DIRECTORY_PATH")
 
 def read_csv_file(file_name: str, directory: Optional[str] = None, encodings: Optional[List[str]] = None, error_bad_lines: Optional[bool] = False) -> Optional[pd.DataFrame]:
 	"""
-	Reads a CSV file into a pandas DataFrame. This function allows specification of the directory, encodings, 
-	and handling of bad lines in the CSV file. If the file cannot be read, the function returns None.
+	Reads a CSV file into a pandas DataFrame. This function allows specification of the directory, encodings, and handling of bad lines in the CSV file. If the file cannot be read, the function returns None.
 
-	:param file_name: String representing the name of the CSV file to read.
-	:param directory: Optional string specifying the directory where the file is located. If None, it is assumed the file is in the current working directory.
-	:param encodings: Optional list of strings specifying the encodings to try. Defaults to ['utf-8'].
-	:param error_bad_lines: Optional boolean indicating whether to skip bad lines in the CSV. If False, an error is raised for bad lines. Defaults to False.
-	:return: A pandas DataFrame containing the data from the CSV file, or None if the file cannot be read.
+	Parameters
+	----------
+	file_name: str
+		The name of the CSV file to read.
+	directory: Optional[str]
+		Optional string specifying the directory where the file is located. If None, it is assumed the file is in the current working directory.
+	encodings: Optional[List[str]]
+		Optional list of strings specifying the encodings to try. Defaults to ['utf-8'].
+	error_bad_lines: Optional[bool]
+		Optional boolean indicating whether to skip bad lines in the CSV. If False, an error is raised for bad lines. Defaults to False.
+
+	Returns
+	-------
+	Optional[pd.DataFrame]
+		The DataFrame containing the CSV data, or None if the file could not be read.
 	"""
 	# Set default encodings if none are provided
 	if encodings is None:
@@ -99,6 +130,10 @@ def generate_table(df: pd.DataFrame, table_title: str) -> None:
 		The DataFrame to be printed.
 	table_title : str
 		The title of the table.
+
+	Returns
+	-------
+	None
 	"""
 	# Create a Rich Table
 	table = Table(title=table_title)
@@ -140,17 +175,24 @@ def calculate_digit_coverage(rows) -> int:
 	-------
 	int
 		The number of digits in the given rows.
-		"""
+	"""
 	number_of_digits = rows['implied_zero'].notna().sum()
 	return number_of_digits
 
 def clean_digits(df: pd.DataFrame, filter_greater_than_numbers: bool, filter_implied_zeroes: bool, preidentified_periodical: bool) -> pd.DataFrame:
-	"""Clean and filter digit tokens in the DataFrame while retaining non-digit pages.
+	"""
+	Clean and filter digit tokens in the DataFrame while retaining non-digit pages.
 	
 	Parameters
 	----------
 	df : pd.DataFrame
 		The DataFrame to be cleaned.
+	filter_greater_than_numbers : bool
+		Whether to filter out digits greater than the maximum page number.
+	filter_implied_zeroes : bool
+		Whether to filter out implied zeroes.
+	preidentified_periodical : bool
+		Whether the DataFrame contains preidentified periodical data.
 		
 	Returns
 	-------
@@ -238,7 +280,26 @@ def clean_digits(df: pd.DataFrame, filter_greater_than_numbers: bool, filter_imp
 	
 	return full_df_with_digits
 
-def process_file(file_path: str, is_preidentified_periodical: bool, should_filter_greater_than_numbers: bool, should_filter_implied_zeroes: bool) -> pd.DataFrame:
+def process_file(file_path: str, is_preidentified_periodical: bool, should_filter_greater_than_numbers: bool, should_filter_implied_zeroes: bool) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+	"""
+	Process a CSV file to clean and filter digit tokens while retaining non-digit pages.
+
+	Parameters
+	----------
+	file_path : str
+		The path to the CSV file to be processed.
+	is_preidentified_periodical : bool
+		Whether the file is a preidentified periodical.
+	should_filter_greater_than_numbers : bool
+		Whether to filter out digits greater than the maximum page number.
+	should_filter_implied_zeroes : bool
+		Whether to filter out implied zeroes.
+
+	Returns
+	-------
+	tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]
+		A tuple containing the expanded DataFrame, the cleaned subset of digits, and the grouped DataFrame.
+	"""
 	full_df = read_csv_file(file_path)
 	if 'page_number' not in full_df.columns:
 		full_df = full_df.rename(columns={'page': 'page_number'})

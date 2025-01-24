@@ -13,13 +13,17 @@ from scripts.utils import read_csv_file, get_data_directory_path
 console = Console()
 
 def transform_annotated_dates(rows: pd.DataFrame) -> pd.DataFrame:
-	"""Transform metadata dates into mergeable dates.
+	"""
+	Transform metadata dates into mergeable dates.
 	
-	Args:
+	Parameters:
+	-----------
 		rows (pd.DataFrame): The rows to be transformed.
 		
-	Returns:
-		pd.DataFrame: The transformed rows."""
+	Returns
+	-----------
+		pd.DataFrame: The transformed rows.
+	"""
 	date = rows.iloc[0].dates.replace('-', ' ').split(' ')
 	day = date[1] if (len(date) == 3) and ('-' not in rows.iloc[0].dates) else '1'
 	start_month = date[0]
@@ -33,13 +37,17 @@ def transform_annotated_dates(rows: pd.DataFrame) -> pd.DataFrame:
 	return rows
 
 def clean_annotated_df(annotated_df: pd.DataFrame) -> pd.DataFrame:
-	"""Clean and normalize dates in the annotated datasets that were created manually in Notion.
+	"""
+	Clean and normalize dates in the annotated datasets that were created manually in Notion.
 	
-	Args:
+	Parameters:
+	-----------
 		annotated_df (pd.DataFrame): The annotated dataset to be cleaned and normalized.
 	
-	Returns:
-		pd.DataFrame: The cleaned and normalized annotated dataset."""
+	Returns
+	-----------
+		pd.DataFrame: The cleaned and normalized annotated dataset.
+	"""
 	annotated_df.columns = [x.lower().replace(' ', '_') for x in annotated_df.columns]
 	annotated_df['notes'] = annotated_df['notes'].fillna('')
 	annotated_df = annotated_df.ffill()
@@ -50,10 +58,12 @@ def cut_vols(rows: pd.DataFrame) -> pd.DataFrame:
 	"""
 	Filter volume rows based on the type of page and the presence of duplicates. Optional additional processsing of HT volumes to ensure that we are getting best issue definition as possible.
 
-	Args:
+	Parameters:
+	-----------
 		rows (pd.DataFrame): The rows to be filtered.
 
 	Returns:
+	-----------
 		pd.DataFrame: The filtered rows.
 	"""
 	# Make a copy to ensure original data is preserved
@@ -83,29 +93,53 @@ def cut_vols(rows: pd.DataFrame) -> pd.DataFrame:
 
 	return final_rows
 
-def clean_arab_observer_df(arabobserver_df):
-    arabobserver_df.loc[(arabobserver_df.start_issue == '1965-06-07') & (arabobserver_df.page_number == 328), 'notes'] = 'Not actually a cover'
+def clean_arab_observer_df(arabobserver_df: pd.DataFrame) -> pd.DataFrame:
+	"""
+	Clean and normalize dates in the Arab Observer dataset.
+	
+	Parameters:
+	-----------
+		arabobserver_df (pd.DataFrame): The Arab Observer dataset to be cleaned and normalized.
+		
+	Returns:
+	-----------
+		pd.DataFrame: The cleaned and normalized Arab Observer dataset.
+	"""
+	arabobserver_df.loc[(arabobserver_df.start_issue == '1965-06-07') & (arabobserver_df.page_number == 328), 'notes'] = 'Not actually a cover'
 
-    arabobserver_df.loc[(arabobserver_df.start_issue == '1965-06-07') & (arabobserver_df.page_number == 328), 'type_of_page'] = 'cover_page'
-    arabobserver_df.loc[(arabobserver_df.start_issue == '1965-06-07') & (arabobserver_df.page_number == 328), 'start_issue'] = '1965-06-14'
-    return arabobserver_df
+	arabobserver_df.loc[(arabobserver_df.start_issue == '1965-06-07') & (arabobserver_df.page_number == 328), 'type_of_page'] = 'cover_page'
+	arabobserver_df.loc[(arabobserver_df.start_issue == '1965-06-07') & (arabobserver_df.page_number == 328), 'start_issue'] = '1965-06-14'
+	return arabobserver_df
 
-def clean_afro_asian_df(afroasian_df):
-    afroasian_df.loc[(afroasian_df.start_issue == '1967-06-01') & (afroasian_df.page_number == 2), 'notes'] = 'Not actually a cover'
-    afroasian_df.loc[(afroasian_df.start_issue == '1967-06-01') & (afroasian_df.page_number == 2), 'type_of_page'] = 'cover_page'
-    afroasian_df.loc[(afroasian_df.start_issue == '1967-09-01') & (afroasian_df.page_number == 4), 'notes'] = 'Not actually a cover'
-    afroasian_df.loc[(afroasian_df.start_issue == '1967-09-01') & (afroasian_df.page_number == 4), 'type_of_page'] = 'cover_page'
-    return afroasian_df
+def clean_afro_asian_df(afroasian_df: pd.DataFrame) -> pd.DataFrame:
+	"""
+	Clean and normalize dates in the Afro-Asian dataset.
 
+	Parameters:
+	-----------
+		afroasian_df (pd.DataFrame): The Afro-Asian dataset to be cleaned and normalized.
+
+	Returns:
+	-----------
+		pd.DataFrame: The cleaned and normalized Afro-Asian dataset.
+	"""
+	afroasian_df.loc[(afroasian_df.start_issue == '1967-06-01') & (afroasian_df.page_number == 2), 'notes'] = 'Not actually a cover'
+	afroasian_df.loc[(afroasian_df.start_issue == '1967-06-01') & (afroasian_df.page_number == 2), 'type_of_page'] = 'cover_page'
+	afroasian_df.loc[(afroasian_df.start_issue == '1967-09-01') & (afroasian_df.page_number == 4), 'notes'] = 'Not actually a cover'
+	afroasian_df.loc[(afroasian_df.start_issue == '1967-09-01') & (afroasian_df.page_number == 4), 'type_of_page'] = 'cover_page'
+	return afroasian_df
 
 def clean_annotated_ht_volume(annotated_ht_df:pd.DataFrame, volume_type: str) -> pd.DataFrame:
-	"""Process and clean an annotated HathiTrust volume.
+	"""
+	Process and clean an annotated HathiTrust volume.
 	
-	Args:
+	Parameters:
+	----------
 		annotated_ht_df (pd.DataFrame): The annotated HathiTrust volume to be processed.
 		volume_type (str): The type of volume to be processed. Either grouped or individual.
 	
 	Returns:
+	-----------
 		annotated_ht_df (pd.DataFrame): The processed annotated HathiTrust volume.
 	"""
 	# Fill forward to propagate the last non-null date through NaNs temporarily
@@ -146,9 +180,11 @@ def clean_annotated_ht_volume(annotated_ht_df:pd.DataFrame, volume_type: str) ->
 	return annotated_ht_df
 
 def merge_datasets(annotated_df: pd.DataFrame, preidentified_periodicals_df: pd.DataFrame, data_directory_path: str, cut_volumes: bool, rerun_code: bool, save_to_file: bool, volume_type: str):
-	"""Merge extracted features dataset with the annotated datasets.
+	"""
+	Merge extracted features dataset with the annotated datasets.
 
-	Args:
+	Parameters:
+	-----------
 		annotated_df (pd.DataFrame): The annotated dataset to be merged.
 		preidentified_periodicals_df (pd.DataFrame): The preidentified periodicals dataset to be merged.
 		data_directory_path (str): The path to the data directory.
@@ -158,6 +194,7 @@ def merge_datasets(annotated_df: pd.DataFrame, preidentified_periodicals_df: pd.
 		volume_type (str): The type of volume to be processed. Either grouped or individual.
 	
 	Returns:
+	-----------
 		None
 	"""
 	periodical_name = preidentified_periodicals_df.lowercase_periodical_name.unique().tolist()[0]
@@ -214,7 +251,8 @@ def map_annotated_ht_volumes( data_directory_path: str, rerun_code: bool, cut_vo
 	"""
 	This function maps the annotated HathiTrust volumes to the preidentified periodicals with full metadata. It merges the datasets and saves the merged dataset to a file.
 
-	Args:
+	Parameters:
+	-----------
 		data_directory_path (str): The path to the data directory.
 		rerun_code (bool): A boolean indicating whether to rerun the code.
 		cut_volumes (bool): A boolean indicating whether to cut volumes.
@@ -222,6 +260,7 @@ def map_annotated_ht_volumes( data_directory_path: str, rerun_code: bool, cut_vo
 		volume_type (str): The type of volume to be processed. Either grouped or individual.
 	
 	Returns:
+	-----------
 		None
 	"""
 	

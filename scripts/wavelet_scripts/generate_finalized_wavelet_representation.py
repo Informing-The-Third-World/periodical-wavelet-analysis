@@ -24,7 +24,7 @@ import sys
 
 sys.path.append("..")
 from scripts.utils import read_csv_file, get_data_directory_path, generate_table
-from scripts.wavelet_scripts.generate_token_frequency_signal_processing_analysis import process_tokens
+from scripts.wavelet_scripts.generate_token_frequency_wavelet_analysis import process_tokens
 
 
 def calculate_rank_stability(df, rank_columns):

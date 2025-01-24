@@ -1,4 +1,4 @@
-# Token Frequency & Signal Processing Analysis Notes
+# Serial Token Frequency As Wavelet & Signal Processing Analysis Scripts Notes
 
 This document outlines the methodology, logic, and key considerations for analyzing token frequency data extracted from OCR text as a signal, enabling the use of signal processing techniques to extract meaningful patterns. The ultimate goal is to improve issue segmentation and periodical classification within the HathiTrust corpus by identifying trends and anomalies across pages, volumes, or periodicals.
 
