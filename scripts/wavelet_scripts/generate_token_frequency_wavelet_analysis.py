@@ -3,6 +3,7 @@ import os
 import sys
 import warnings
 import shutil
+import json
 
 # Third-party imports
 import pandas as pd
@@ -547,7 +548,15 @@ def compare_and_rank_wavelet_metrics(
 	weights: dict = None,
 ) -> pd.DataFrame:
 	"""
-	Compare wavelet metrics for raw and smoothed tokens and determine the best representation.
+	This function evaluates wavelet performance for a raw signal and its smoothed counterpart across three types of wavelet transforms: DWT (Discrete Wavelet Transform), CWT (Continuous Wavelet Transform), and SWT (Stationary Wavelet Transform). Its goal is to rank and combine configurations to determine the best overall wavelet representation for the signal.
+
+	It first starts by defining ranking weights if not provided for metrics such as MSE, PSNR, energy entropy, and sparsity. It then retrieves a list of available DWT and CWT wavelets using PyWavelets library. CWT wavelets are filtered to exclude complex-valued wavelets due to current implementation constraints. It also creates a file path for saving results that is constructed using the specified wavelet_directory and volume_id.
+	
+	For each wavelet type (DWT, CWT, and SWT), the function processes both the raw and smoothed signals. Evaluations can run in parallel or sequentially, controlled by the use_parallel flag. Parallelization can speed up large-scale computations. If any errors occur during evaluation, the function logs the error and initializes the results as empty DataFrames. Results include both successfully evaluated configurations and skipped configurations (e.g., unsupported parameter combinations). Skipped configurations are saved for transparency once combined between the raw and smoothed signals. 
+
+	For the successfully performed wavelets, results for raw and smoothed signals are combined and are passed to the determine_best_wavelet_representation function to rank configurations based on the provided metrics and weights. That function returns the best configuration, ranked results, the top subset of ranked results, the overall correlation between normalized and z-score weighted scores, and the updated ranking configuration for future reference. We save the full final results, the top subset of results, and the ranking configuration to separate files for each wavelet type and signal type. Finally, a table is generated with summarizing the best configuration for each wavelet type.
+
+	The next step is to repeat the process for the top subset results from DWT, CWT, and SWT, which are combined into a single DataFrame. The choice to use only the top subset results and not the full ranked results is primarily for speed and efficiency. The top subset is typically sufficient for identifying the best configurations, and it reduces the computational burden of processing the full results. The combined results are then ranked and compared to determine the best overall wavelet representation across all types, with again all three files saved. The best combined results are returned, which contain the best wavelet configuration.
 
 	Parameters:
 	-----------
@@ -571,7 +580,7 @@ def compare_and_rank_wavelet_metrics(
 	"""
 	if weights is None:
 		weights = {
-			'wavelet_mse': 0.3,
+			'wavelet_mse': 0.2,
 			'wavelet_psnr': 0.3,
 			'wavelet_energy_entropy': 0.2,
 			'wavelet_sparsity': 0.2,
@@ -579,7 +588,6 @@ def compare_and_rank_wavelet_metrics(
 			'smoothness': 0.1,
 			'correlation': 0.1,
 			'avg_variance_across_levels': 0.1,
-			'variance_ratio_across_levels': 0.1,
 			'emd_value': 0.2,
 			'kl_divergence': 0.2,
 		}
@@ -648,30 +656,39 @@ def compare_and_rank_wavelet_metrics(
 	# Ensure results are non-empty before ranking
 	table_cols = ['wavelet_rank', 'final_wavelet_rank', 'final_score', 'wavelet_norm_weighted_score', 'normalized_diff', 'wavelet_zscore_weighted_score', 'missing_metrics_count']
 	if not dwt_combined_results.empty:
-		best_dwt, ranked_dwt, subset_ranked_dwt, dwt_correlation_score = determine_best_wavelet_representation(dwt_combined_results, "DWT", weights, False)
+		best_dwt, ranked_dwt, subset_ranked_dwt, dwt_correlation_score, dwt_ranking_config = determine_best_wavelet_representation(dwt_combined_results, "DWT", weights, False)
 		subset_ranked_dwt['wavelet_type'] = 'DWT'
 		ranked_dwt.to_csv(f"{file_path}full_dwt_results.csv", index=False)
 		subset_ranked_dwt.to_csv(f"{file_path}subset_dwt_results.csv", index=False)
+		# Write the dwt_ranking_config to a file
+		with open(f"{file_path}dwt_ranking_config.json", "w") as f:
+			json.dump(dwt_ranking_config, f, indent=4)
 		if not best_dwt.empty:
 			generate_table(best_dwt[ ['wavelet', 'signal_type'] + table_cols], f"Best DWT Wavelet Configuration (Correlation: {dwt_correlation_score:.2f})")
 	else:
 		subset_ranked_dwt = pd.DataFrame()
 
 	if not cwt_combined_results.empty:
-		best_cwt, ranked_cwt, subset_ranked_cwt, cwt_correlation_score = determine_best_wavelet_representation(cwt_combined_results, "CWT", weights, False)
+		best_cwt, ranked_cwt, subset_ranked_cwt, cwt_correlation_score, cwt_ranking_config = determine_best_wavelet_representation(cwt_combined_results, "CWT", weights, False)
 		subset_ranked_cwt['wavelet_type'] = 'CWT'
 		ranked_cwt.to_csv(f"{file_path}full_cwt_results.csv", index=False)
 		subset_ranked_cwt.to_csv(f"{file_path}subset_cwt_results.csv", index=False)
+		# Write the cwt_ranking_config to a file
+		with open(f"{file_path}cwt_ranking_config.json", "w") as f:
+			json.dump(cwt_ranking_config, f, indent=4)
 		if not best_cwt.empty:
 			generate_table(best_cwt[['wavelet', 'signal_type'] + table_cols], f"Best CWT Wavelet Configuration (Correlation: {cwt_correlation_score:.2f})")
 	else:
 		subset_ranked_cwt = pd.DataFrame()
 
 	if not swt_combined_results.empty:
-		best_swt, ranked_swt, subset_ranked_swt, swt_correlation_score = determine_best_wavelet_representation(swt_combined_results, "SWT", weights, False)
+		best_swt, ranked_swt, subset_ranked_swt, swt_correlation_score, swt_ranking_config = determine_best_wavelet_representation(swt_combined_results, "SWT", weights, False)
 		subset_ranked_swt['wavelet_type'] = 'SWT'
 		ranked_swt.to_csv(f"{file_path}full_swt_results.csv", index=False)
 		subset_ranked_swt.to_csv(f"{file_path}subset_swt_results.csv", index=False)
+		# Write the swt_ranking_config to a file
+		with open(f"{file_path}swt_ranking_config.json", "w") as f:
+			json.dump(swt_ranking_config, f, indent=4)
 		if not best_swt.empty:
 			generate_table(best_swt[['wavelet', 'signal_type'] + table_cols], f"Best SWT Wavelet Configuration (Correlation: {swt_correlation_score:.2f})")
 	else:
@@ -682,11 +699,14 @@ def compare_and_rank_wavelet_metrics(
 	table_cols = ['combined_' + col for col in table_cols]
 	# Determine overall best representation
 	if not combined_results.empty:
-		best_combined_results, ranked_combined_results, subset_ranked_combined_results, combined_correlation_score = determine_best_wavelet_representation(
+		best_combined_results, ranked_combined_results, subset_ranked_combined_results, combined_correlation_score, combined_ranking_config = determine_best_wavelet_representation(
 			combined_results, "Combined", weights, True
 		)
 		ranked_combined_results.to_csv(f"{file_path}combined_results.csv", index=False)
 		subset_ranked_combined_results.to_csv(f"{file_path}subset_combined_results.csv", index=False)
+		# Write the combined_ranking_config to a file
+		with open(f"{file_path}combined_ranking_config.json", "w") as f:
+			json.dump(combined_ranking_config, f, indent=4)
 		if not best_combined_results.empty:
 			generate_table(best_combined_results[['wavelet', 'signal_type', 'wavelet_type'] + table_cols], f"Best Combined Wavelet Configuration (Correlation: {combined_correlation_score:.2f})")
 	else:
