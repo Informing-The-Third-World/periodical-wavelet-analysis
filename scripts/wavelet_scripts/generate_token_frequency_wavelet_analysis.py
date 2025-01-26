@@ -60,14 +60,14 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 	-------
 	tuple
 		A tuple containing:
-        - `merged_expanded_df` (pd.DataFrame): A DataFrame with token-level data, metadata, 
-          and processed signal columns, including smoothed and standardized token and digit signals.
-        - `grouped_df` (pd.DataFrame): A grouped version of the expanded DataFrame, often 
-          useful for aggregating data by specific columns.
-        - `tokens_raw_signal` (np.ndarray): The raw token frequency signal as a 1D array, 
-          ready for further analysis (e.g., FFT or wavelet transformations).
-        - `tokens_smoothed_signal` (np.ndarray): The smoothed token frequency signal as a 1D 
-          array, obtained via a moving average.
+		- `merged_expanded_df` (pd.DataFrame): A DataFrame with token-level data, metadata, 
+		  and processed signal columns, including smoothed and standardized token and digit signals.
+		- `grouped_df` (pd.DataFrame): A grouped version of the expanded DataFrame, often 
+		  useful for aggregating data by specific columns.
+		- `tokens_raw_signal` (np.ndarray): The raw token frequency signal as a 1D array, 
+		  ready for further analysis (e.g., FFT or wavelet transformations).
+		- `tokens_smoothed_signal` (np.ndarray): The smoothed token frequency signal as a 1D 
+		  array, obtained via a moving average.
 	"""
 	expanded_df, subset_digits, grouped_df = process_file(file_path, preidentified_periodical, should_filter_greater_than_numbers, should_filter_implied_zeroes)
 	
@@ -173,9 +173,9 @@ def filter_wavelets(wavelets: list, exclude_complex: bool = True) -> list:
 		return filtered_wavelets
 	return wavelets
 
-def normalize_weights_dynamically(metrics: list, weights: dict, results_df: pd.DataFrame) -> dict:
+def normalize_weights_dynamically(metrics: list, weights: dict, results_df: pd.DataFrame, ranking_config: dict) -> tuple:
 	"""
-	Normalize weights dynamically by separating metrics into shared and specific categories. Shared metrics are those present in a significant portion of the dataset (results_df), while specific metrics are less commonly present. This separation allows prioritization of metrics in different groups by applying distinct weighting factors to each group. The function returns a dictionary of normalized weights for each metric.
+	This function dynamically normalize weights for metrics based on variance, presence, and distribution across shared and specific metrics. It ensures that metrics are appropriately prioritized, reflecting their relevance and availability, while also maintaining consistency across all metrics. It first checks the variance and presence of each metric. Variance reflects the amount of variation in a metric across the dataset. Metrics with low variance may not provide meaningful distinctions between wavelet configurations, as they exhibit minimal variability. Presence indicates the proportion of data rows where the metric is non-null. Metrics with higher presence values are more widely applicable and thus hold more weight in decision-making. The function then identifies shared and specific metrics based on a predefined threshold. Shared metrics are those with a presence above the threshold, while specific metrics have a presence below the threshold. Shared metrics are prioritized over specific metrics, as they are more widely applicable and thus more likely to influence the final ranking. Weights are dynamically adjusted by combining the initial weight with a factor derived from the metric’s variance and presence. Shared metrics receive a higher proportion (e.g., 70%) of the total weight allocation, reflecting their broader relevance, while specific metrics are allocated the remaining proportion (e.g., 30%). The final weights are normalized to sum to 1, ensuring that the total weight is consistent across all metrics. This is crucial for proportional calculations when combining metric scores. Without normalization, metrics with higher raw weights could disproportionately skew results. The function also logs the final weights and other relevant information in the ranking configuration for future reference.
 
 	Parameters:
 	-----------
@@ -185,38 +185,87 @@ def normalize_weights_dynamically(metrics: list, weights: dict, results_df: pd.D
 		Dictionary of initial weights for each metric.
 	results_df : pd.DataFrame
 		DataFrame containing the results with metrics.
+	ranking_config : dict
+		Configuration dictionary to log weight adjustments.
 
 	Returns:
 	--------
 	normalized_weights : dict
-		Dictionary of normalized weights adjusted for shared and specific metrics.
+		Dictionary of dynamically normalized weights.
+	ranking_config : dict
+		Updated ranking configuration with normalized weights.
 	"""
-	# Determine shared and specific metrics
-	threshold = 0.9  # Define a threshold for "majority presence" (e.g., 90% of rows)
-	total_rows = len(results_df)
+	# Step 1: Compute Variance and Presence
+	metric_variances = results_df[metrics].var()
+	metric_presence = results_df[metrics].notna().mean()
+
+	# Log variance and presence for each metric in ranking_config
+	for metric in metrics:
+		for metric_config in ranking_config["metrics"]:
+			if metric_config["metric"] == metric:
+				metric_config["variance"] = metric_variances.get(metric, None)
+				metric_config["presence"] = metric_presence.get(metric, None)
+
+	# Step 2: Identify Shared and Specific Metrics
+	threshold = 0.9  # Define a threshold for "shared" metrics
 	shared_metrics = [
-		metric for metric in metrics
-		if metric in weights and results_df[metric].notna().sum() / total_rows >= threshold
+		metric for metric in metrics if metric_presence.get(metric, 0) >= threshold
 	]
-	specific_metrics = [metric for metric in metrics if metric not in shared_metrics and metric in weights]
+	specific_metrics = [metric for metric in metrics if metric not in shared_metrics]
 
-	# Calculate total weights for each bucket
-	shared_total_weight = sum(weights[metric] for metric in shared_metrics)
-	specific_total_weight = sum(weights[metric] for metric in specific_metrics)
+	# Step 3: Adjust Weights
+	shared_weight_factor = 0.7  # Prioritize shared metrics
+	specific_weight_factor = 0.3  # Lesser emphasis on specific metrics
 
-	# Normalize weights within each bucket
+	dynamic_adjustments = {
+		metric: metric_variances[metric] * metric_presence[metric]
+		for metric in metrics
+		if metric in weights
+	}
+
+	# Step 4: Normalize Weights
 	normalized_weights = {}
-	shared_weight_factor = 0.7  # Adjust this factor to prioritize shared metrics
-	specific_weight_factor = 0.3  # Remaining weight for specific metrics
+	for metric in shared_metrics:
+		normalized_weights[metric] = (
+			weights[metric] * dynamic_adjustments.get(metric, 1.0)
+		)
+	for metric in specific_metrics:
+		normalized_weights[metric] = (
+			weights[metric] * dynamic_adjustments.get(metric, 1.0)
+		)
+
+	# Normalize weights within shared and specific buckets
+	shared_total_weight = sum(normalized_weights[metric] for metric in shared_metrics)
+	specific_total_weight = sum(normalized_weights[metric] for metric in specific_metrics)
 
 	for metric in shared_metrics:
-		normalized_weights[metric] = (weights[metric] / shared_total_weight) * shared_weight_factor
+		normalized_weights[metric] = (
+			normalized_weights[metric] / shared_total_weight * shared_weight_factor
+		)
+		ranking_config["metrics"][metric]["was_shared"] = True
 
 	for metric in specific_metrics:
-		normalized_weights[metric] = (weights[metric] / specific_total_weight) * specific_weight_factor
+		normalized_weights[metric] = (
+			normalized_weights[metric] / specific_total_weight * specific_weight_factor
+		)
+		ranking_config["metrics"][metric]["was_specific"] = True
 
-	# Return normalized weights
-	return normalized_weights
+	# Normalize all weights to sum to 1
+	total_weight = sum(normalized_weights.values())
+	if total_weight > 0:
+		normalized_weights = {metric: weight / total_weight for metric, weight in normalized_weights.items()}
+	else:
+		console.print("[bright_red]All weights removed! Check your metric definitions.[/bright_red]")
+		normalized_weights = {metric: 1 / len(metrics) for metric in metrics}  # Fallback: Equal distribution
+		console.print("[yellow]Fallback: Weights evenly distributed across metrics.[/yellow]")
+
+	# Step 5: Update ranking_config with final weights
+	for metric, final_weight in normalized_weights.items():
+		for metric_config in ranking_config["metrics"]:
+			if metric_config["metric"] == metric:
+				metric_config["final_weight"] = final_weight
+
+	return normalized_weights, ranking_config
 
 def determine_best_wavelet_representation(
 	results_df: pd.DataFrame, signal_type: str, weights: dict = None, is_combined: bool = False
@@ -243,13 +292,16 @@ def determine_best_wavelet_representation(
 		DataFrame with combined scores and rankings.
 	subset_ranked_results : pd.DataFrame
 		DataFrame with combined scores and rankings for top configurations by wavelet, signal type, and wavelet type.
+	overall_correlation_norm_zscore : float
+		The correlation between normalized and z-score weighted scores.
+	updated_ranking_config : dict
+		Dictionary containing the ranking configuration for the analysis.
 	"""
 	console.print(f"Results for {signal_type} Wavelet Analysis")
-
 	# Default weights if not provided
 	if weights is None:
 		weights = {
-			'wavelet_mse': 0.3,
+			'wavelet_mse': 0.2,
 			'wavelet_psnr': 0.3,
 			'wavelet_energy_entropy': 0.2,
 			'wavelet_sparsity': 0.2,
@@ -257,26 +309,64 @@ def determine_best_wavelet_representation(
 			'smoothness': 0.1,
 			'correlation': 0.1,
 			'avg_variance_across_levels': 0.1,
-			'variance_ratio_across_levels': 0.1,
 			'emd_value': 0.2,
 			'kl_divergence': 0.2,
-			'scales_used': 0.1,
-			'decomposition_levels': 0.1,
 		}
+	ranking_config = {
+		"signal_type": signal_type,
+		"is_combined": is_combined,
+		"metrics": []
+	}
+	# Populate ranking_config dynamically
+	for metric, original_weight in weights.items():
+		ranking_config["metrics"].append({
+			"metric": metric,
+			"original_weight": original_weight,
+			"final_weight": None,  # Will be updated later
+			"normalized_weight": None,  # Will be updated later
+			"was_removed": False,
+			"removal_reason": None,
+			"was_inverted": False,
+			"was_shared": False,
+			"was_specific": False,
+			"variance": None,
+			"presence": None
+		})
 
-	# Handle zero variance or invalid metrics
-	if 'wavelet_sparsity' in results_df.columns and results_df['wavelet_sparsity'].nunique() == 1:
-		console.print(f"[yellow]Excluding 'wavelet_sparsity' from analysis due to zero variance.[/yellow]")
-		weights.pop('wavelet_sparsity', None)
+	# Dynamically handle zero or near-zero variance metrics
+	threshold = 1e-6  # Define a tolerance for "near-zero" variance
+	metrics_to_remove = [
+		metric for metric in weights
+		if metric in results_df.columns and results_df[metric].std() <= threshold
+	]
+	for metric in metrics_to_remove:
+		avg_value = results_df[metric].mean()
+		std_value = results_df[metric].std()
+		ranking_config["metrics"][metric]["was_removed"] = True
+		ranking_config["metrics"][metric]["removal_reason"] = f"Low variance (std: {std_value:.6f}, mean: {avg_value:.6f})"
 
-	# Log-transform extreme values in 'wavelet_energy_entropy'
-	if 'wavelet_energy_entropy' in results_df.columns and results_df['wavelet_energy_entropy'].min() < 0:
-		results_df['wavelet_energy_entropy'] = np.log1p(np.abs(results_df['wavelet_energy_entropy']))
+		console.print(
+			f"[yellow]Excluding '{metric}' from analysis due to low variance "
+			f"(std: {std_dev:.6f}, mean: {avg_value:.6f}).[/yellow]"
+		)
+		weights.pop(metric, None)
+
+	# Log-transform extreme values in `wavelet_energy_entropy` if necessary
+	if 'wavelet_energy_entropy' in results_df.columns:
+		if results_df['wavelet_energy_entropy'].min() < 0:
+			console.print(f"[yellow]Log-transforming `wavelet_energy_entropy` due to negative values.[/yellow]")
+			results_df['wavelet_energy_entropy'] = np.log1p(np.abs(results_df['wavelet_energy_entropy']))
+		else:
+			console.print(f"[green]No log-transform needed for `wavelet_energy_entropy`. All values are non-negative.[/green]")
 
 	# Handle complex-valued metrics
-	for column in results_df.select_dtypes(include=[np.complex_]).columns:
-		console.print(f"[yellow]Converting {column} to magnitudes due to complex values.[/yellow]")
-		results_df[column] = np.abs(results_df[column])
+	complex_columns = results_df.select_dtypes(include=[np.complex_]).columns
+	if len(complex_columns) > 0:
+		console.print(f"[yellow]Handling complex metrics: {list(complex_columns)}[/yellow]")
+		for column in complex_columns:
+			results_df[column] = np.abs(results_df[column])
+	else:
+		console.print(f"[green]No complex-valued metrics found. Skipping this step.[/green]")
 
 	# Normalize metrics with RobustScaler for stability
 	metrics = [col for col in weights.keys() if col in results_df.columns]
@@ -291,11 +381,20 @@ def determine_best_wavelet_representation(
 			console.print(f"[bright_red]Error normalizing '{metric}': {e}. Skipping this metric.[/bright_red]")
 			metrics.remove(metric)
 
+	# Update `ranking_config` to include any skipped metrics
+	for metric_config in ranking_config["metrics"]:
+		if metric_config["metric"] not in metrics:
+			metric_config["was_removed"] = True
+			metric_config["removal_reason"] = "Normalization Error"
+
 	# Invert metrics where lower is better
-	invert_metrics = ['wavelet_mse', 'wavelet_entropy', 'variance_ratio_across_levels', 'emd_value', 'kl_divergence']
+	invert_metrics = ['wavelet_mse', 'wavelet_entropy', 'emd_value', 'kl_divergence']
 	for metric in invert_metrics:
 		if metric in metrics:
 			normalized_df[f"{prefix}{metric}_norm"] = 1 - normalized_df[f"{prefix}{metric}_norm"]
+			for metric_config in ranking_config["metrics"]:
+				if metric_config["metric"] == metric:
+					metric_config["was_inverted"] = True
 
 	# Compute z-scores
 	for metric in metrics:
@@ -318,7 +417,7 @@ def determine_best_wavelet_representation(
 	)
 
 	# Normalize weights
-	normalized_weights = normalize_weights_dynamically(metrics, weights, normalized_df)
+	normalized_weights, updated_ranking_config = normalize_weights_dynamically(metrics, weights, normalized_df, ranking_config)
 
 	# Compute weighted scores for norm and z-score
 	penalty_weight = 0.05  # Adjust penalty weight as needed
@@ -339,7 +438,8 @@ def determine_best_wavelet_representation(
 				normalized_weights[metric] * row[f"{prefix}{metric}_zscore"]
 				for metric in metrics
 				if pd.notna(row[f"{prefix}{metric}_zscore"])
-			)
+			) / sum(normalized_weights[metric] for metric in metrics if pd.notna(row[f"{prefix}{metric}_zscore"]))
+			- penalty_weight * row['missing_metrics_count']  # Apply penalty here too
 		),
 		axis=1
 	)
@@ -386,7 +486,7 @@ def determine_best_wavelet_representation(
 	].corr().iloc[0, 1]
 	# Return the best configuration, rankings, and correlation
 	best_config = final_ranked_results.iloc[0:1]
-	return best_config, ranked_results, final_ranked_results, overall_correlation_norm_zscore
+	return best_config, ranked_results, final_ranked_results, overall_correlation_norm_zscore, updated_ranking_config
 
 def compare_and_rank_wavelet_metrics(
 	raw_signal: np.ndarray, 

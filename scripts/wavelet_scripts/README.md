@@ -8,6 +8,8 @@ Metrics to Include
 
 These metrics directly evaluate the quality of the wavelet representation or its alignment with the original signal:
 
+*Reconstruction Quality*
+
 1. wavelet_mse (Mean Squared Error):
 
    - Why Include: A lower MSE indicates better reconstruction fidelity. It’s a core measure of how well the wavelet transform approximates the original signal.
@@ -16,13 +18,17 @@ These metrics directly evaluate the quality of the wavelet representation or its
 
    - Why Include: Complements MSE by quantifying reconstruction quality on a logarithmic scale. It’s particularly useful when MSE alone doesn’t fully capture perceptual quality.
 
-3. wavelet_energy_entropy:
+*Efficiency & Compactness*
 
-   - Why Include: Indicates the balance between energy distribution and entropy, highlighting how well the wavelet preserves signal structure. Particularly relevant for token frequency signals, which may have structural patterns.
-
-4. wavelet_sparsity:
+3. wavelet_sparsity:
 
    - Why Include: Reflects the compactness of the wavelet representation, which can be valuable for identifying efficient wavelet transforms.
+
+*Statistical & Structural Fidelity*
+
+4. wavelet_energy_entropy:
+
+   - Why Include: Indicates the balance between energy distribution and entropy, highlighting how well the wavelet preserves signal structure. Particularly relevant for token frequency signals, which may have structural patterns.
 
 5. emd_value (Earth Mover’s Distance):
 
@@ -32,6 +38,8 @@ These metrics directly evaluate the quality of the wavelet representation or its
 
    - Why Include: Captures information-theoretic differences between the original and reconstructed signals. Useful for evaluating how well the transform preserves statistical characteristics.
 
+*Signal Integrity*
+
 7. smoothness:
 
     - Why Include: Highlights the degree to which the reconstructed signal avoids oscillatory noise. This can be valuable if smoothness is desired in your analysis.
@@ -40,15 +48,31 @@ These metrics directly evaluate the quality of the wavelet representation or its
 
    - Why Include: Measures the linear relationship between the original and reconstructed signals, which is crucial for preserving signal integrity.
 
+*Multi-Scale Analysis*
+
+9. avg_variance_across_levels:
+
+   - Why Include: Offers a holistic view of energy distribution across wavelet decomposition levels, which can be critical for capturing the signal’s multi-scale characteristics.
+
 Metrics to Exclude
 
 These metrics are better treated as informational rather than included in rankings:
-	1.	wavelet_adaptive_threshold:
-	•	Why Exclude: It’s primarily descriptive of the sparsity threshold derived for the wavelet coefficients. While informative, it doesn’t directly evaluate performance.
-	2.	signal_length:
-	•	Why Exclude: This is an intrinsic property of the signal and doesn’t contribute to evaluating wavelet performance.
-	3.	decomposition_levels / scales_used:
-	•	Why Exclude: While these can influence performance, they are better used to describe configurations rather than directly ranking wavelets.
+
+1. wavelet_adaptive_threshold:
+
+   - Why Exclude: It’s primarily descriptive of the sparsity threshold derived for the wavelet coefficients. While informative, it doesn’t directly evaluate performance.
+
+2. signal_length:
+
+   - Why Exclude: This is an intrinsic property of the signal and doesn’t contribute to evaluating wavelet performance.
+
+3. decomposition_levels / scales_used:
+
+   - Why Exclude: While these can influence performance, they are better used to describe configurations rather than directly ranking wavelets.
+
+4. variance_ratio_across_levels:
+
+   - Why Exclude: While potentially useful for diagnostics, its relevance to ranking is ambiguous. A high ratio could signal good performance or overfitting to noise, making it less reliable for direct evaluation.
 
 Recommended Metric Set
 
