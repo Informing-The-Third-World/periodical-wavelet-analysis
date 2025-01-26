@@ -33,7 +33,17 @@ console = Console()
 ## DATA PROCESSING FUNCTIONS
 def process_tokens(file_path: str, preidentified_periodical: bool, should_filter_greater_than_numbers: bool, should_filter_implied_zeroes: bool) -> tuple:
 	"""
-	Process tokens from the given file and return the processed DataFrame along with normalized token and digit signals.
+	Processes and cleans token-level data extracted from OCR-processed periodicals, preparing it for wavelet analysis.
+
+	The function begins by reading token data from the specified file and applies the process_file function to expand tokens while filtering based on the provided flags. Metadata columns (e.g., enumeration_chronology, pub_date) are included by merging with a corresponding metadata CSV if available. For pre-identified periodicals, additional metadata fields such as start_issue and end_issue are included, and only relevant columns are retained.
+
+	Token-level data is merged with digit counts to create a comprehensive DataFrame, with missing values filled as zeros for consistency. Token and digit signals are smoothed using a moving average (window size = 5) and then standardized by subtracting the mean and dividing by the standard deviation. As a sanity check, the first two rows of the processed DataFrame are printed using the generate_table utility. Finally, raw and smoothed token frequency signals are extracted as 1D arrays, ensuring no NaN or infinite values, and are prepared for further analysis.
+
+	Core Assumptions:
+	- Input files must include required columns (e.g., tokens_per_page, page_number), and a metadata CSV must exist for token data if columns like enumeration_chronology are missing.
+	- Pre-identified periodicals provide additional metadata fields that the function incorporates.
+	- The smoothing process (centered moving average, window size = 5) assumes relatively uniform page lengths for meaningful results.
+	- Missing values are replaced with zeros to ensure compatibility with downstream tools.
 
 	Parameters
 	----------
@@ -49,7 +59,15 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 	Returns
 	-------
 	tuple
-		A tuple containing the merged expanded DataFrame, the grouped DataFrame, the raw token signal, and the smoothed token signal.
+		A tuple containing:
+        - `merged_expanded_df` (pd.DataFrame): A DataFrame with token-level data, metadata, 
+          and processed signal columns, including smoothed and standardized token and digit signals.
+        - `grouped_df` (pd.DataFrame): A grouped version of the expanded DataFrame, often 
+          useful for aggregating data by specific columns.
+        - `tokens_raw_signal` (np.ndarray): The raw token frequency signal as a 1D array, 
+          ready for further analysis (e.g., FFT or wavelet transformations).
+        - `tokens_smoothed_signal` (np.ndarray): The smoothed token frequency signal as a 1D 
+          array, obtained via a moving average.
 	"""
 	expanded_df, subset_digits, grouped_df = process_file(file_path, preidentified_periodical, should_filter_greater_than_numbers, should_filter_implied_zeroes)
 	
@@ -111,7 +129,7 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 	console.print(f"Smoothed Signal Length: {len(tokens_smoothed_signal)}", style="bright_green")
 	return merged_expanded_df, grouped_df, tokens_raw_signal, tokens_smoothed_signal
 
-def check_if_actual_issue(row, grouped_df):
+def check_if_actual_issue(row: pd.Series, grouped_df: pd.DataFrame) -> bool:
 	"""
 	Check if the given row corresponds to an actual issue.
 
@@ -157,7 +175,7 @@ def filter_wavelets(wavelets: list, exclude_complex: bool = True) -> list:
 
 def normalize_weights_dynamically(metrics: list, weights: dict, results_df: pd.DataFrame) -> dict:
 	"""
-	Normalize weights dynamically by separating metrics into shared and specific categories.
+	Normalize weights dynamically by separating metrics into shared and specific categories. Shared metrics are those present in a significant portion of the dataset (results_df), while specific metrics are less commonly present. This separation allows prioritization of metrics in different groups by applying distinct weighting factors to each group. The function returns a dictionary of normalized weights for each metric.
 
 	Parameters:
 	-----------
@@ -918,22 +936,50 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 
 	return volume_frequencies_df
 
-def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, should_filter_implied_zeroes: bool, only_use_annotated_periodicals: bool, load_existing_data: bool = False, rerun_analysis: bool = True, should_use_parallel: bool = False) -> pd.DataFrame:
+def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, should_filter_implied_zeroes: bool, only_use_annotated_periodicals: bool, load_existing_data: bool = False, rerun_analysis: bool = True, should_use_parallel: bool = False):
 	"""
-	Generate token frequency analysis for all identified HathiTrust periodicals.
+	Generates token frequency analysis for all identified HathiTrust periodicals.
+
+	This function performs several tasks to analyze token frequency data extracted from periodicals:
+	1. Identifies annotated periodicals and reads their metadata and token-level data.
+	2. Checks for existing wavelet-processed data and loads it if `load_existing_data` is set to `True`.
+	3. Iterates over a predefined list of preidentified periodicals title by title, processing their volumes either from scratch or by reusing previously saved data.
+	4. Applies various filtering options (e.g., excluding numbers larger than the maximum page number or implied zeroes).
+	5. Aggregates and processes volume-level data, generating signal processing features.
+	6. Saves the resulting token frequency features to a consolidated CSV file for further analysis.
 
 	Parameters:
-	- should_filter_greater_than_numbers: Flag indicating whether to filter out numbers greater than the max possible page number.
-	- should_filter_implied_zeroes: Flag indicating whether to filter out implied zeroes.
-	- only_use_annotated_periodicals: Flag indicating whether to process only annotated periodicals.
-	- load_existing_data: Whether to load existing code.
-	- rerun_analysis: Whether to rerun the analysis.
-	- should_use_parallel: Whether to use parallel processing.
-	"""
+	----------
+	should_filter_greater_than_numbers: bool
+		Flag indicating whether to filter out tokens representing numbers greater than the maximum possible page number. It is used in the function `process_tokens`, which passes it to the `process_file` function, and primarily for issue boundary detection.
 
+	should_filter_implied_zeroes: bool
+		Flag indicating whether to filter out tokens representing "implied zeroes." Implied zeroes are derived from the difference between a token digit and a page number. It is used in the function `process_tokens`, which passes it to the `process_file` function, and primarily for issue boundary detection.
+
+	only_use_annotated_periodicals: bool
+		Flag indicating whether to process only periodicals with manual annotations. If `True`, periodicals without annotation files are skipped to focus solely on validated datasets.
+
+	load_existing_data: bool, default=False
+		Whether to load pre-existing wavelet or token frequency analysis data if available. If `False`, the function deletes existing data and regenerates it from scratch.
+
+	rerun_analysis: bool, default=True
+		Whether to rerun the token frequency analysis for volumes. If `False`, existing data for already-processed volumes will not be overwritten.
+
+	should_use_parallel: bool, default=False
+		Whether to enable parallel processing for volume analysis. This can improve performance when processing large datasets by leveraging multiple CPU cores.
+
+	Returns:
+	--------
+	None
+
+	Notes:
+	--------
+	- The function assumes the existence of certain directories and files, such as the `HathiTrust-pcc-datasets` directory containing periodical metadata and token-level data. It does use the `get_data_directory_path` function to determine the correct path, as well as `os.path.join` to construct file paths so hopefully that will work regardless of the OS.
+
+	"""
 	# Count the number of matching files
 	matching_files = []
-	for directory, _, files in tqdm(os.walk("../datasets/annotated_ht_ef_datasets/"), desc="Counting matching files"):
+	for directory, _, files in tqdm(os.walk(os.path.join("..", "..", "datasets", "annotated_ht_ef_datasets/")), desc="Counting matching files"):
 		for file in files:
 			if file.endswith(".csv") and 'individual' in file:
 				if os.path.exists(os.path.join(directory, file)):
@@ -943,7 +989,7 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 	matching_files_df = pd.DataFrame(matching_files)
 	console.print(f"Found {len(matching_files_df)} matching files.", style="bright_green")
 
-	volume_features_output_path = os.path.join("..", "datasets", "all_volume_features_and_frequencies.csv")
+	volume_features_output_path = os.path.join("..",  "..", "datasets", "all_volume_features_and_frequencies.csv")
 	volume_features_exist = False
 	if os.path.exists(volume_features_output_path) and load_existing_data:
 		volume_features_df = read_csv_file(volume_features_output_path)
