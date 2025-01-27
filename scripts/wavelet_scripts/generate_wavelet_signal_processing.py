@@ -1,5 +1,6 @@
 # Standard library imports
 import warnings
+import sys
 
 # Third-party imports
 import pandas as pd
@@ -10,11 +11,13 @@ import multiprocessing
 from tqdm import tqdm
 from rich.console import Console
 import pywt
-from scipy.fft import fft
-from scipy.signal import find_peaks
-from skimage.metrics import peak_signal_noise_ratio as psnr
 from scipy.stats import wasserstein_distance
 from scipy.special import rel_entr
+from skimage.metrics import peak_signal_noise_ratio as psnr
+
+# Local application imports
+sys.path.append("..")
+from scripts.wavelet_scripts.generate_wavelet_features import *
 
 # Disable max rows for Altair
 alt.data_transformers.disable_max_rows()
@@ -26,7 +29,6 @@ warnings.filterwarnings('ignore')
 console = Console()
 
 ## WAVELET SIGNAL ANALYSIS CODE
-
 def process_wavelet_results(results: list, skipped_results: list, signal_type: str, metrics: list = ['wavelet_energy_entropy', 'wavelet_sparsity']) -> tuple:
 	"""
 	Process and clean wavelet results, handling infinite or NaN values and combining skipped results.
@@ -72,308 +74,7 @@ def process_wavelet_results(results: list, skipped_results: list, signal_type: s
 		console.print(f"First row error: {combined_skipped_results_df.iloc[0]['error']}")
 	return cleaned_results_df, combined_skipped_results_df
 
-def energy_entropy_ratio(coeffs: list) -> float:
-	"""
-	Compute energy-to-entropy ratio for wavelet coefficients.
-
-	Parameters:
-	-----------
-	coeffs : list of np.ndarray
-		Wavelet decomposition coefficients.
-
-	Returns:
-	--------
-	ratio : float
-		Energy-to-entropy ratio.
-	"""
-	# Use absolute values of coefficients for energy and entropy computation
-	magnitudes = np.abs(coeffs)
-	total_energy = np.sum(magnitudes ** 2)
-	entropy = -np.sum(
-		(magnitudes ** 2 / total_energy) * np.log2(magnitudes ** 2 / total_energy + 1e-12)
-	)  # Add a small constant to avoid log(0)
-	return total_energy / (entropy if entropy > 0 else 1e-12)  # Avoid division by zero
-
-def adaptive_threshold(coeffs: list) -> float:
-	"""
-	Calculate an adaptive threshold based on the Median Absolute Deviation (MAD).
-
-	Parameters:
-	----------
-	coeffs : list of np.ndarray
-		Wavelet decomposition coefficients.
-
-	Returns:
-	--------
-	threshold : float
-		Adaptive threshold for sparsity computation.
-	"""
-	flat_coeffs = np.abs(np.concatenate(coeffs))  # Flatten coefficients and take absolute values
-	mad = np.median(np.abs(flat_coeffs - np.median(flat_coeffs)))  # Compute MAD
-	return mad * 1.4826  # Scale factor for Gaussian distribution
-
-def adaptive_sparsity_measure(coeffs: list) -> tuple:
-	"""
-	Measure sparsity of wavelet coefficients using an adaptive threshold.
-
-	Parameters:
-	-----------
-	coeffs : list of np.ndarray
-		Wavelet decomposition coefficients.
-
-	Returns:
-	--------
-	sparsity : float
-		Percentage of near-zero coefficients based on adaptive threshold.
-	threshold : float
-		Computed adaptive threshold for sparsity measurement.
-	"""
-	flat_coeffs = np.abs(np.concatenate(coeffs))
-	
-	# Calculate adaptive threshold using Median Absolute Deviation (MAD)
-	threshold = np.median(flat_coeffs) * 1.4826  # MAD scaling for normal distribution
-	
-	# Compute sparsity as the percentage of coefficients below the adaptive threshold
-	sparsity = np.sum(flat_coeffs < threshold) / len(flat_coeffs)
-	
-	return sparsity, threshold
-
-def wavelet_entropy(coeffs: list) -> float:
-	"""
-	Calculate wavelet entropy as a measure of signal complexity.
-
-	Parameters:
-	-----------
-	coeffs : list of np.ndarray
-		Wavelet decomposition coefficients.
-	
-	Returns:
-	-----------
-	entropy : float
-		Wavelet entropy.
-	"""
-	magnitudes = np.abs(coeffs)
-	total_energy = np.sum(magnitudes ** 2)
-	probabilities = (magnitudes ** 2) / (total_energy + 1e-12)
-	return -np.sum(probabilities * np.log2(probabilities + 1e-12))
-
-def signal_smoothness(signal: np.ndarray) -> float:
-	"""
-	Compute signal smoothness based on second-order differences.
-
-	Parameters:
-	-----------
-	signal : np.ndarray
-		Signal to analyze.
-
-	Returns:
-	-----------
-	smoothness : float
-		Smoothness measure based on second-order differences.
-	"""
-	second_derivative = np.diff(signal, n=2)
-	smoothness = 1 / (1 + np.mean(second_derivative ** 2))
-	return smoothness
-
-def correlation_coefficients(original: np.ndarray, reconstructed: np.ndarray) -> float:
-	"""
-	Calculate the correlation coefficient between the original and reconstructed signals.
-
-	Parameters:
-	-----------
-	original : np.ndarray
-		The original signal.
-	reconstructed : np.ndarray
-		The reconstructed signal.
-
-	Returns:
-	-----------
-	correlation : float
-		Correlation coefficient.
-	"""
-	return np.corrcoef(original, reconstructed)[0, 1]
-
-def signal_variance_across_levels(coeffs: list) -> list:
-	"""
-	Calculate the variance of wavelet coefficients across decomposition levels.
-
-	Parameters:
-	-----------
-	coeffs : list of np.ndarray
-		Variance of coefficients across levels.
-
-	Returns:
-	-----------
-	variances : list
-		Variance of coefficients across levels.
-	"""
-	return [np.var(c) for c in coeffs]
-
-def compute_additional_wavelet_features(coeffs: list, reconstructed_signal: np.ndarray, original_signal: np.ndarray) -> dict:
-	"""
-	Compute additional features from wavelet coefficients and reconstructed signal.
-	
-	Parameters:
-	----------
-	coeffs : list or np.ndarray
-		Wavelet decomposition coefficients.
-	reconstructed_signal : np.ndarray
-		Signal reconstructed from the wavelet coefficients.
-	original_signal : np.ndarray
-		The original signal used for decomposition.
-
-	Returns:
-	--------
-	features : dict
-		Dictionary containing additional computed features.
-	"""
-	entropy = wavelet_entropy(coeffs)
-	variances = signal_variance_across_levels(coeffs)
-	avg_variance = np.mean(variances)
-	variance_ratio = max(variances) / (sum(variances) + 1e-12)
-	smoothness = signal_smoothness(reconstructed_signal)
-	correlation = correlation_coefficients(original_signal, reconstructed_signal)
-
-	return {
-		"wavelet_entropy": entropy,
-		"avg_variance_across_levels": avg_variance,
-		"variance_ratio_across_levels": variance_ratio,
-		"smoothness": smoothness,
-		"correlation": correlation,
-	}
-
-def calculate_signal_metrics(
-	tokens_signal: np.ndarray,
-	use_signal_type: str,
-	min_tokens: float,
-	prominence=1.0,
-	distance=5,
-	verbose=False
-) -> dict:
-	"""
-	Calculate metrics for a given signal, including dominant frequency, dynamic cutoff,
-	relative peak detection, autocorrelation, signal envelope, and spectral features.
-
-	Parameters
-	----------
-	tokens_signal : np.ndarray
-		The signal to be analyzed.
-	use_signal_type : str
-		The type of page being analyzed (e.g., raw or smoothed "tokens_per_page").
-	min_tokens : float
-		The minimum observed tokens per page in the original scale.
-	prominence : float, optional
-		Minimum prominence of peaks for relative detection.
-	distance : int, optional
-		Minimum distance between peaks for relative detection.
-	verbose : bool, optional
-		Whether to log detailed metrics for debugging.
-
-	Returns
-	-------
-	dict
-		Results containing signal metrics.
-	"""
-	# Ensure signal is valid
-	if tokens_signal is None or len(tokens_signal) == 0:
-		console.print(f"[bright_red]Error: Empty or invalid signal for {use_signal_type}.[/bright_red]")
-		return {}
-
-	# Clean the signal to handle NaN or Inf values
-	tokens_signal = np.nan_to_num(tokens_signal, nan=0.0, posinf=0.0, neginf=0.0)
-
-	try:
-		# Perform FFT for frequency analysis
-		tokens_fft = fft(tokens_signal)
-		frequencies = np.fft.fftfreq(len(tokens_fft))
-
-		# Analyze positive frequencies and amplitudes
-		positive_frequencies = frequencies[:len(frequencies) // 2]
-		positive_amplitudes = np.abs(tokens_fft[:len(tokens_fft) // 2])
-
-		# Find FFT peaks
-		peaks, _ = find_peaks(positive_amplitudes[1:])
-		num_peaks = len(peaks)
-		peak_amplitude = np.max(positive_amplitudes[1:][peaks]) if num_peaks > 0 else None
-		dominant_frequency = (
-			positive_frequencies[peaks[np.argmax(positive_amplitudes[1:][peaks])]]
-			if num_peaks > 0 else None
-		)
-
-		# Calculate dynamic cutoff
-		dynamic_cutoff_signal = (
-			max(np.median(tokens_signal) - (peak_amplitude or 0), np.percentile(tokens_signal, 10))
-			if num_peaks > 0 else np.percentile(tokens_signal, 10)
-		)
-		dynamic_cutoff_original_scale = max(dynamic_cutoff_signal, min_tokens)
-
-		# Perform relative peak detection
-		prominence = prominence or np.std(tokens_signal) * 0.1
-		distance = distance or max(1, len(tokens_signal) // 20)
-		relative_peaks, relative_properties = find_peaks(tokens_signal, prominence=prominence, distance=distance)
-		relative_num_peaks = len(relative_peaks)
-		avg_prominence = np.mean(relative_properties["prominences"]) if relative_num_peaks > 0 else None
-
-		# Calculate autocorrelation
-		autocorr = np.correlate(tokens_signal, tokens_signal, mode='full')
-		max_autocorr = np.max(autocorr[len(autocorr) // 2:])
-
-		# Signal envelope
-		upper_envelope = np.max(np.abs(tokens_signal))
-		lower_envelope = -upper_envelope
-
-		# Spectral features
-		spectral_magnitude = np.sum(positive_amplitudes)
-		spectral_centroid = (
-			np.sum(positive_frequencies * positive_amplitudes) / spectral_magnitude
-			if spectral_magnitude > 0 else None
-		)
-		spectral_bandwidth = (
-			np.sqrt(np.sum((positive_frequencies - spectral_centroid) ** 2 * positive_amplitudes) / spectral_magnitude)
-			if spectral_centroid else None
-		)
-
-		# Logging (controlled by `verbose`)
-		if verbose:
-			console.print(f"[bright_cyan]Metrics for {use_signal_type}[/bright_cyan]")
-			console.print(f"Signal Length: {len(tokens_signal)}")
-			console.print(f"Signal Mean: {np.mean(tokens_signal):.2f}, Std: {np.std(tokens_signal):.2f}")
-			console.print(f"Dominant Frequency: {dominant_frequency}")
-			console.print(f"Dynamic Cutoff: {dynamic_cutoff_original_scale}")
-			console.print(f"Number of Peaks: {num_peaks}")
-			console.print(f"Peak Amplitude: {peak_amplitude}")
-			console.print(f"Relative Peaks: {relative_num_peaks}")
-			console.print(f"Average Prominence: {avg_prominence}")
-			console.print(f"Max Autocorrelation: {max_autocorr}")
-			console.print(f"Spectral Centroid: {spectral_centroid}")
-			console.print(f"Spectral Bandwidth: {spectral_bandwidth}")
-			console.print(f"Upper Envelope: {upper_envelope}")
-			console.print(f"Lower Envelope: {lower_envelope}")
-			console.print(f"Spectral Magnitude: {spectral_magnitude}")
-
-		return {
-			"signal_type": use_signal_type,
-			"dominant_frequency": dominant_frequency,
-			"dynamic_cutoff": dynamic_cutoff_original_scale,
-			"num_peaks": num_peaks,
-			"peak_amplitude": peak_amplitude,
-			"relative_num_peaks": relative_num_peaks,
-			"avg_prominence": avg_prominence,
-			"max_autocorrelation": max_autocorr,
-			"upper_envelope": upper_envelope,
-			"lower_envelope": lower_envelope,
-			"spectral_centroid": spectral_centroid,
-			"spectral_bandwidth": spectral_bandwidth,
-			"spectral_magnitude": spectral_magnitude,
-			"positive_frequencies": positive_frequencies,
-			"positive_amplitudes": positive_amplitudes,
-		}
-	except Exception as e:
-		console.print(f"[bright_red]Error calculating metrics for {use_signal_type}: {e}[/bright_red]")
-		return {}
-
 ## DWT, CWT, and SWT EVALUATION FUNCTIONS
-
 def pad_signal(signal: np.ndarray, max_level: int) -> tuple:
 	"""
 	Pad the signal to ensure it has an even length and is compatible with SWT.
@@ -505,6 +206,7 @@ def process_dwt_wavelet(signal: np.ndarray, wavelet: str, modes: list, signal_ty
 	"""
 	results = []
 	skipped_wavelets = []
+
 	try:
 		wavelet_filter_len = pywt.Wavelet(wavelet).dec_len
 		if len(signal) < wavelet_filter_len:

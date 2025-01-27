@@ -27,9 +27,9 @@ from scripts.utils import read_csv_file, get_data_directory_path, generate_table
 from scripts.wavelet_scripts.generate_token_frequency_wavelet_analysis import process_tokens
 
 
-def calculate_rank_stability(df, rank_columns):
+def calculate_rank_stability(df: pd.DataFrame, rank_columns: list) -> pd.DataFrame:
 	"""
-	Calculate a stability metric for wavelet rankings based on multiple ranking columns.
+	Calculate a stability metric for wavelet rankings based on multiple ranking columns. The rank columns list should be ordered from the least to most important rank.
 	
 	Parameters:
 	-----------
@@ -58,7 +58,7 @@ def calculate_rank_stability(df, rank_columns):
 	
 	return df
 
-def compute_wavelet_scores(df, is_combined, rank_bins=[0, 10, 20, 50, 100, None],):
+def compute_wavelet_scores(df: pd.DataFrame, is_combined: bool, rank_bins:list=[0, 10, 20, 50, 100, None],):
 	"""
 	Computes wavelet scores for either individual volumes or combined titles.
 
