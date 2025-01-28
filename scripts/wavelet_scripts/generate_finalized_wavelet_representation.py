@@ -1,31 +1,15 @@
 import os
-import re
 import pandas as pd
-from tqdm import tqdm
-import altair as alt
-alt.data_transformers.disable_max_rows()
-from collections import deque
+
 import warnings
 warnings.filterwarnings('ignore')
 from rich.console import Console
-from rich.table import Table
-import numpy as np
-from scipy.fft import fft
-import scipy.stats as stats
-from scipy.signal import find_peaks
-from scipy.ndimage import gaussian_filter1d
-from scipy.signal import convolve
-from sklearn.preprocessing import MinMaxScaler
-import statsmodels.api as sm
-import pywt
-import matplotlib.pyplot as plt
+
 console = Console()
 import sys
 
 sys.path.append("..")
-from scripts.utils import read_csv_file, get_data_directory_path, generate_table
-from scripts.wavelet_scripts.generate_token_frequency_wavelet_analysis import process_tokens
-
+from scripts.utils import read_csv_file, get_data_directory_path
 
 def calculate_rank_stability(df: pd.DataFrame, rank_columns: list) -> pd.DataFrame:
 	"""
@@ -155,7 +139,6 @@ def compute_wavelet_scores(df: pd.DataFrame, is_combined: bool, rank_bins:list=[
 	final_df = final_df.sort_values(by=[f'{prefix}composite_score'], ascending=[False])
 	return final_df
 
-
 def generate_finalized_wavelets():
 	data_directory_path = get_data_directory_path()
 	preidentified_periodicals_df = read_csv_file(os.path.join(data_directory_path, "HathiTrust-pcc-datasets", "datasets", "periodical_metadata", "classified_preidentified_periodicals_with_full_metadata.csv"))
@@ -233,8 +216,6 @@ def generate_finalized_wavelets():
 			final_combined_volume_df.to_csv(finalized_combined_output_path, index=False)
 			console.print(f"Saved finalized combined results for {periodical_title} to {finalized_combined_output_path}.", style="bright_green")
 
-
-		subset_final_combined_volume_df
 
 if __name__ == "__main__":
 	generate_finalized_wavelets()

@@ -175,6 +175,7 @@ def determine_scales(signal_length: int, max_scale: int = 128, dynamic: bool = T
 	scales : np.ndarray
 		Array of scales for the wavelet transform.
 	"""
+	console.print(f"Determining scales for signal length {signal_length} with max scale {max_scale}.", style="bright_cyan")
 	if dynamic:
 		# Use half the signal length or cap at max_scale
 		scales = np.arange(1, min(signal_length // 2, max_scale))
@@ -293,9 +294,12 @@ def evaluate_dwt_performance(signal: np.ndarray, wavelets: list, modes: list, si
 	skipped_results = []
 
 	for wavelet in tqdm(wavelets, desc=f"Testing DWT Wavelets for {signal_type}"):
-		wavelet_results, wavelet_skipped = process_dwt_wavelet(signal, wavelet, modes, signal_type)
-		total_results.extend(wavelet_results)
-		skipped_results.extend(wavelet_skipped)
+		try:
+			wavelet_results, wavelet_skipped = process_dwt_wavelet(signal, wavelet, modes, signal_type)
+			total_results.extend(wavelet_results)
+			skipped_results.extend(wavelet_skipped)
+		except Exception as e:
+			console.print(f"Error processing wavelet {wavelet}: {e}", style="bright_red")
 
 	cleaned_total_results, cleaned_skipped_results = process_wavelet_results(pd.DataFrame(total_results), pd.DataFrame(skipped_results), signal_type)
 	return cleaned_total_results, cleaned_skipped_results
@@ -374,8 +378,23 @@ def process_cwt_wavelet(signal: np.ndarray, wavelet: str, scales: np.ndarray, si
 		# Compute reconstructed signal (summed across scales)
 		reconstructed_signal = np.sum(coeffs, axis=0)
 
-		# Compute PSNR
-		psnr_value = psnr(signal, reconstructed_signal, data_range=np.max(signal) - np.min(signal))
+		# Check if signal or coefficients are complex
+		is_complex = np.iscomplexobj(coeffs) or np.iscomplexobj(signal)
+
+		# Convert to magnitudes if complex
+		if is_complex:
+			signal_magnitude = np.abs(signal)
+			reconstructed_signal_magnitude = np.abs(reconstructed_signal)
+		else:
+			signal_magnitude = signal
+			reconstructed_signal_magnitude = reconstructed_signal
+
+		# Compute PSNR using appropriate signal representation
+		psnr_value = psnr(
+			signal_magnitude, 
+			reconstructed_signal_magnitude, 
+			data_range=np.max(signal_magnitude) - np.min(signal_magnitude)
+		)
 
 		# Compute Metrics
 		total_energy = np.sum(coeffs ** 2)
@@ -389,8 +408,12 @@ def process_cwt_wavelet(signal: np.ndarray, wavelet: str, scales: np.ndarray, si
 		additional_features = compute_additional_wavelet_features(coeffs, reconstructed_signal, signal)
 
 		# Calculate KL Divergence and EMD
-		emd_value = wasserstein_distance(signal, reconstructed_signal)
-		kl_div_value = sum(rel_entr(signal, reconstructed_signal))
+		if is_complex:
+			emd_value = wasserstein_distance(signal_magnitude, reconstructed_signal_magnitude)
+			kl_div_value = sum(rel_entr(signal_magnitude, reconstructed_signal_magnitude))
+		else:
+			emd_value = wasserstein_distance(signal, reconstructed_signal)
+			kl_div_value = sum(rel_entr(signal, reconstructed_signal))
 		# Append Results
 		results.append({
 			'signal_type': signal_type,
@@ -403,6 +426,7 @@ def process_cwt_wavelet(signal: np.ndarray, wavelet: str, scales: np.ndarray, si
 			'scales_used': len(scales),
 			'emd_value': emd_value,
 			'kl_divergence': kl_div_value,
+			'is_complex': is_complex,
 			**additional_features
 		})
 	except Exception as e:
@@ -435,14 +459,18 @@ def evaluate_cwt_performance(signal: np.ndarray, wavelets: list, signal_type: st
 		- skipped_results: pd.DataFrame
 		  DataFrame containing skipped wavelets.
 	"""
-	scales = determine_scales(len(signal), max_scale=max_scale, dynamic=dynamic_scales)
+	signal_length = len(signal)
+	scales = determine_scales(signal_length, max_scale=max_scale, dynamic=dynamic_scales)
 	total_results = []
 	skipped_results = []
 
 	for wavelet in tqdm(wavelets, desc=f"Testing CWT Wavelets for {signal_type}"):
-		wavelet_results, wavelet_skipped = process_cwt_wavelet(signal, wavelet, scales, signal_type)
-		total_results.extend(wavelet_results)
-		skipped_results.extend(wavelet_skipped)
+		try:
+			wavelet_results, wavelet_skipped = process_cwt_wavelet(signal, wavelet, scales, signal_type)
+			total_results.extend(wavelet_results)
+			skipped_results.extend(wavelet_skipped)
+		except Exception as e:
+			console.print(f"Error processing wavelet {wavelet}: {e}", style="bright_red")
 
 	cleaned_total_results, cleaned_skipped_results = process_wavelet_results(pd.DataFrame(total_results), pd.DataFrame(skipped_results), signal_type)
 	return cleaned_total_results, cleaned_skipped_results
@@ -472,7 +500,8 @@ def evaluate_cwt_performance_parallel(signal: np.ndarray, wavelets: list, signal
 		- skipped_results: pd.DataFrame
 		  DataFrame containing skipped wavelets.
 	"""
-	scales = determine_scales(len(signal), max_scale=max_scale, dynamic=dynamic_scales)
+	signal_length = len(signal)
+	scales = determine_scales(signal_length, max_scale=max_scale, dynamic=dynamic_scales)
 	total_results = []
 	skipped_results = []
 	max_workers = min(len(wavelets), multiprocessing.cpu_count() - 1)
@@ -622,9 +651,12 @@ def evaluate_swt_performance(signal: np.ndarray, wavelets: list, signal_type: st
 	skipped_results = []
 
 	for wavelet in tqdm(wavelets, desc=f"Testing SWT Wavelets for {signal_type}"):
-		wavelet_results, wavelet_skipped = process_swt_wavelet(signal, wavelet, signal_type, max_level)
-		total_results.extend(wavelet_results)
-		skipped_results.extend(wavelet_skipped)
+		try:
+			wavelet_results, wavelet_skipped = process_swt_wavelet(signal, wavelet, signal_type, max_level)
+			total_results.extend(wavelet_results)
+			skipped_results.extend(wavelet_skipped)
+		except Exception as e:
+			console.print(f"Error processing wavelet {wavelet}: {e}", style="bright_red")
 
 	cleaned_total_results, cleaned_skipped_results = process_wavelet_results(
 		pd.DataFrame(total_results), pd.DataFrame(skipped_results), signal_type

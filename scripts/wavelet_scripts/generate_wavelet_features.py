@@ -360,6 +360,9 @@ def calculate_dynamic_cutoff(tokens_signal: np.ndarray, peak_amplitude: float = 
         console.print("[yellow]Signal is empty; returning zero as dynamic cutoff.[/yellow]")
         return 0.0
 
+    # Ensure peak_amplitude is not None
+    peak_amplitude = peak_amplitude if peak_amplitude is not None else 0.0
+
     # Calculate the cutoff based on the signal's distribution and peak amplitude
     dynamic_cutoff_signal = max(
         np.median(tokens_signal) - peak_amplitude, 
@@ -371,111 +374,111 @@ def calculate_dynamic_cutoff(tokens_signal: np.ndarray, peak_amplitude: float = 
     return dynamic_cutoff_original_scale
 	
 def detect_relative_peaks(
-    tokens_signal: np.ndarray,
-    prominence: float = None,
-    distance: int = None
+	tokens_signal: np.ndarray,
+	prominence: float = None,
+	distance: int = None
 ) -> dict:
-    """
-    Perform relative peak detection on the signal and calculate statistics about the detected peaks.
+	"""
+	Perform relative peak detection on the signal and calculate statistics about the detected peaks.
 
-    Parameters:
-    -----------
-    tokens_signal : np.ndarray
-        The signal to analyze.
-    prominence : float, optional
-        Minimum prominence of peaks. If None, defaults to 10% of the signal's standard deviation.
-    distance : int, optional
-        Minimum distance between peaks. If None, defaults to 1/20th of the signal's length.
+	Parameters:
+	-----------
+	tokens_signal : np.ndarray
+		The signal to analyze.
+	prominence : float, optional
+		Minimum prominence of peaks. If None, defaults to 10% of the signal's standard deviation.
+	distance : int, optional
+		Minimum distance between peaks. If None, defaults to 1/20th of the signal's length.
 
-    Returns:
-    --------
-    dict:
-        A dictionary containing:
-        - `relative_num_peaks`: Number of detected peaks.
-        - `avg_prominence`: Average prominence of the detected peaks.
-        - `relative_peaks`: Indices of the detected peaks.
-        - `relative_properties`: Properties of the detected peaks.
-    """
-    if len(tokens_signal) == 0:
-        console.print("[yellow]Signal is empty; no peaks detected.[/yellow]")
-        return {
-            "relative_num_peaks": 0,
-            "avg_prominence": None,
-            "relative_peaks": [],
-            "relative_properties": {},
-        }
+	Returns:
+	--------
+	dict:
+		A dictionary containing:
+		- `relative_num_peaks`: Number of detected peaks.
+		- `avg_prominence`: Average prominence of the detected peaks.
+		- `relative_peaks`: Indices of the detected peaks.
+		- `relative_properties`: Properties of the detected peaks.
+	"""
+	if len(tokens_signal) == 0:
+		console.print("[yellow]Signal is empty; no peaks detected.[/yellow]")
+		return {
+			"relative_num_peaks": 0,
+			"avg_prominence": None,
+			"relative_peaks": [],
+			"relative_properties": {},
+		}
 
-    # Set default values for prominence and distance if not provided
-    prominence = prominence or np.std(tokens_signal) * 0.1
-    distance = distance or max(1, len(tokens_signal) // 20)
+	# Set default values for prominence and distance if not provided
+	prominence = prominence or np.std(tokens_signal) * 0.1
+	distance = distance or max(1, len(tokens_signal) // 20)
 
-    try:
-        # Detect peaks
-        relative_peaks, relative_properties = find_peaks(
-            tokens_signal, prominence=prominence, distance=distance
-        )
-        relative_num_peaks = len(relative_peaks)
-        avg_prominence = (
-            np.mean(relative_properties["prominences"]) if relative_num_peaks > 0 else None
-        )
+	try:
+		# Detect peaks
+		relative_peaks, relative_properties = find_peaks(
+			tokens_signal, prominence=prominence, distance=distance
+		)
+		relative_num_peaks = len(relative_peaks)
+		avg_prominence = (
+			np.mean(relative_properties["prominences"]) if relative_num_peaks > 0 else None
+		)
 
-        return {
-            "relative_num_peaks": relative_num_peaks,
-            "avg_prominence": avg_prominence,
-            "relative_peaks": relative_peaks,
-            "relative_properties": relative_properties,
-        }
-    except Exception as e:
-        console.print(f"[red]Error during relative peak detection: {e}[/red]")
-        return {
-            "relative_num_peaks": 0,
-            "avg_prominence": None,
-            "relative_peaks": [],
-            "relative_properties": {},
-        }
+		return {
+			"relative_num_peaks": relative_num_peaks,
+			"avg_prominence": avg_prominence,
+			"relative_peaks": relative_peaks,
+			"relative_properties": relative_properties,
+		}
+	except Exception as e:
+		console.print(f"[red]Error during relative peak detection: {e}[/red]")
+		return {
+			"relative_num_peaks": 0,
+			"avg_prominence": None,
+			"relative_peaks": [],
+			"relative_properties": {},
+		}
 	
 def calculate_autocorrelation(signal: np.ndarray) -> float:
-    """
-    Calculate the maximum autocorrelation of a signal.
+	"""
+	Calculate the maximum autocorrelation of a signal.
 
-    Parameters:
-    -----------
-    signal : np.ndarray
-        The input signal.
+	Parameters:
+	-----------
+	signal : np.ndarray
+		The input signal.
 
-    Returns:
-    --------
-    float:
-        The maximum autocorrelation value.
-    """
-    if len(signal) == 0:
-        console.print("[yellow]Signal is empty; autocorrelation is undefined.[/yellow]")
-        return 0.0
-    autocorr = np.correlate(signal, signal, mode="full")
-    return np.max(autocorr[len(autocorr) // 2:])
+	Returns:
+	--------
+	float:
+		The maximum autocorrelation value.
+	"""
+	if len(signal) == 0:
+		console.print("[yellow]Signal is empty; autocorrelation is undefined.[/yellow]")
+		return 0.0
+	autocorr = np.correlate(signal, signal, mode="full")
+	return np.max(autocorr[len(autocorr) // 2:])
 
 def calculate_signal_envelope(signal: np.ndarray) -> dict:
-    """
-    Calculate the upper and lower envelopes of a signal.
+	"""
+	Calculate the upper and lower envelopes of a signal.
 
-    Parameters:
-    -----------
-    signal : np.ndarray
-        The input signal.
+	Parameters:
+	-----------
+	signal : np.ndarray
+		The input signal.
 
-    Returns:
-    --------
-    dict:
-        A dictionary containing the upper and lower envelopes.
-    """
-    if len(signal) == 0:
-        console.print("[yellow]Signal is empty; envelope is undefined.[/yellow]")
-        return {"upper_envelope": 0.0, "lower_envelope": 0.0}
+	Returns:
+	--------
+	dict:
+		A dictionary containing the upper and lower envelopes.
+	"""
+	if len(signal) == 0:
+		console.print("[yellow]Signal is empty; envelope is undefined.[/yellow]")
+		return {"upper_envelope": 0.0, "lower_envelope": 0.0}
 
-    upper_envelope = np.max(np.abs(signal))
-    lower_envelope = -upper_envelope
+	upper_envelope = np.max(np.abs(signal))
+	lower_envelope = -upper_envelope
 
-    return {"upper_envelope": upper_envelope, "lower_envelope": lower_envelope}
+	return {"upper_envelope": upper_envelope, "lower_envelope": lower_envelope}
 
 def calculate_spectral_features(
     positive_amplitudes: np.ndarray, positive_frequencies: np.ndarray
@@ -495,8 +498,8 @@ def calculate_spectral_features(
     dict:
         A dictionary containing spectral magnitude, centroid, and bandwidth.
     """
-    if len(positive_amplitudes) == 0 or len(positive_frequencies) == 0:
-        console.print("[yellow]FFT data is empty; spectral features cannot be calculated.[/yellow]")
+    if positive_amplitudes is None or positive_frequencies is None or len(positive_amplitudes) == 0 or len(positive_frequencies) == 0:
+        console.print("[yellow]FFT data is empty or None; spectral features cannot be calculated.[/yellow]")
         return {"spectral_magnitude": 0.0, "spectral_centroid": None, "spectral_bandwidth": None}
 
     spectral_magnitude = np.sum(positive_amplitudes)
@@ -519,30 +522,30 @@ def calculate_spectral_features(
     }
 
 def log_metrics(metrics: dict, title: str):
-    """
-    Log metrics for debugging purposes.
+	"""
+	Log metrics for debugging purposes.
 
-    Parameters:
-    -----------
-    metrics : dict
-        The metrics to log.
-    title : str
-        A descriptive title for the metrics.
-    """
-    console.print(f"[bright_cyan]{title}[/bright_cyan]")
-    for key, value in metrics.items():
-        console.print(f"{key}: {value}")
+	Parameters:
+	-----------
+	metrics : dict
+		The metrics to log.
+	title : str
+		A descriptive title for the metrics.
+	"""
+	console.print(f"[bright_cyan]{title}[/bright_cyan]")
+	for key, value in metrics.items():
+		console.print(f"{key}: {value}")
 
 def calculate_signal_metrics(
-    tokens_signal: np.ndarray,
-    use_signal_type: str,
-    min_tokens: float,
-    prominence: float = None,
-    distance: int = None,
-    verbose: bool = True
+	tokens_signal: np.ndarray,
+	use_signal_type: str,
+	min_tokens: float,
+	prominence: float = None,
+	distance: int = None,
+	verbose: bool = True
 ) -> dict:
-    """
-    Calculate comprehensive metrics for a signal.
+	"""
+	Calculate comprehensive metrics for a signal.
 
 	Parameters:
 	-----------
@@ -563,60 +566,60 @@ def calculate_signal_metrics(
 	--------
 	dict:
 		A dictionary containing the calculated metrics.
-    """
-    if tokens_signal is None or len(tokens_signal) == 0:
-        console.print(f"[bright_red]Error: Empty or invalid signal for {use_signal_type}.[/bright_red]")
-        return {}
+	"""
+	if tokens_signal is None or len(tokens_signal) == 0:
+		console.print(f"[bright_red]Error: Empty or invalid signal for {use_signal_type}.[/bright_red]")
+		return {}
 
-    try:
-        # FFT Analysis
-        positive_amplitudes, positive_frequencies = calculate_fft(tokens_signal)
-        fft_metrics = analyze_fft_peaks(
-            positive_amplitudes, positive_frequencies, min_peak_prominence=prominence or 0.01
-        )
+	# try:
+	# FFT Analysis
+	positive_amplitudes, positive_frequencies = calculate_fft(tokens_signal)
+	fft_metrics = analyze_fft_peaks(
+		positive_amplitudes, positive_frequencies, min_peak_prominence=prominence or 0.01
+	)
 
-        # Dynamic Cutoff
-        dynamic_cutoff = calculate_dynamic_cutoff(
-            tokens_signal=tokens_signal,
-            peak_amplitude=fft_metrics.get("peak_amplitude", 0),
-            min_tokens=min_tokens
-        )
+	# Dynamic Cutoff
+	dynamic_cutoff = calculate_dynamic_cutoff(
+		tokens_signal=tokens_signal,
+		peak_amplitude=fft_metrics.get("peak_amplitude", 0),
+		min_tokens=min_tokens
+	)
 
-        # Relative Peaks
-        peak_metrics = detect_relative_peaks(
-            tokens_signal=tokens_signal,
-            prominence=prominence,
-            distance=distance
-        )
+	# Relative Peaks
+	peak_metrics = detect_relative_peaks(
+		tokens_signal=tokens_signal,
+		prominence=prominence,
+		distance=distance
+	)
 
-        # Autocorrelation
-        max_autocorr = calculate_autocorrelation(tokens_signal)
+	# Autocorrelation
+	max_autocorr = calculate_autocorrelation(tokens_signal)
 
-        # Signal Envelope
-        envelope_metrics = calculate_signal_envelope(tokens_signal)
+	# Signal Envelope
+	envelope_metrics = calculate_signal_envelope(tokens_signal)
 
-        # Spectral Features
-        spectral_features = calculate_spectral_features(
-            positive_amplitudes=positive_amplitudes, positive_frequencies=positive_frequencies
-        )
+	# Spectral Features
+	spectral_features = calculate_spectral_features(
+		positive_amplitudes=positive_amplitudes, positive_frequencies=positive_frequencies
+	)
 
-        # Compile Results
-        metrics = {
-            "signal_type": use_signal_type,
-            "dominant_frequency": fft_metrics.get("dominant_frequency"),
-            "dynamic_cutoff": dynamic_cutoff,
-            **peak_metrics,
-            "max_autocorrelation": max_autocorr,
-            **envelope_metrics,
-            **spectral_features,
-        }
+	# Compile Results
+	metrics = {
+		"signal_type": use_signal_type,
+		"dominant_frequency": fft_metrics.get("dominant_frequency"),
+		"dynamic_cutoff": dynamic_cutoff,
+		**peak_metrics,
+		"max_autocorrelation": max_autocorr,
+		**envelope_metrics,
+		**spectral_features,
+	}
 
-        # Logging
-        if verbose:
-            log_metrics(metrics, f"Metrics for {use_signal_type}")
+	# Logging
+	if verbose:
+		log_metrics(metrics, f"Metrics for {use_signal_type}")
 
-        return metrics
+	return metrics
 
-    except Exception as e:
-        console.print(f"[bright_red]Error calculating metrics for {use_signal_type}: {e}[/bright_red]")
-        return {}
+	# except Exception as e:
+	#     console.print(f"[bright_red]Error calculating metrics for {use_signal_type}: {e}[/bright_red]")
+	#     return {}

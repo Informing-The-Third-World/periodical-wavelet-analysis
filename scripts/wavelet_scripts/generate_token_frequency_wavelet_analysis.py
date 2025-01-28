@@ -18,7 +18,7 @@ from statsmodels.tsa.stattools import adfuller, kpss
 from scipy.signal import detrend
 
 # Local application imports
-sys.path.append("..")
+sys.path.append("../..")
 from scripts.utils import read_csv_file, get_data_directory_path, save_chart, process_file, generate_table
 from scripts.wavelet_scripts.generate_wavelet_signal_processing import evaluate_dwt_performance, evaluate_dwt_performance_parallel, evaluate_cwt_performance, evaluate_cwt_performance_parallel, evaluate_swt_performance, evaluate_swt_performance_parallel, calculate_signal_metrics
 
@@ -216,7 +216,7 @@ def apply_detrending(signal: np.ndarray, method: str = "linear") -> np.ndarray:
 		console.print(f"[red]Error applying detrending: {e}. Returning None.[/red]")
 		return None
 
-def check_wavelet_stationarity(signal: np.ndarray, max_lag: int = 10, significance_level: float = 0.05) -> dict:
+def check_wavelet_stationarity(signal: np.ndarray, signal_type: str, max_lag: int = 10, significance_level: float = 0.05) -> dict:
 	"""
 	Check the stationarity of a signal using the Augmented Dickey-Fuller and Kwiatkowski-Phillips-Schmidt-Shin tests.
 
@@ -230,6 +230,8 @@ def check_wavelet_stationarity(signal: np.ndarray, max_lag: int = 10, significan
 	-----------
 	signal : np.ndarray
 		The signal to check for stationarity.
+	signal_type : str
+		The type of signal being analyzed (e.g., raw or smoothed).
 	max_lag : int, optional
 		The maximum lag to consider in the ADF test. Default is 10.
 	significance_level : float, optional
@@ -246,12 +248,12 @@ def check_wavelet_stationarity(signal: np.ndarray, max_lag: int = 10, significan
 	"""
 	# Augmented Dickey-Fuller Test
 	adf_stat, adf_pvalue, _, _, _, _ = adfuller(signal, maxlag=max_lag)
-	console.print(f"[bright_black]ADF Test: Statistic={adf_stat:.4f}, p-value={adf_pvalue:.4f}[/bright_black]")
+	console.print(f"[violet]ADF Test for {signal_type}: Statistic={adf_stat:.4f}, p-value={adf_pvalue:.4f}[/violet]")
 
 	# Kwiatkowski-Phillips-Schmidt-Shin Test
 	try:
 		kpss_stat, kpss_pvalue, _, _ = kpss(signal, regression='c')
-		console.print(f"[bright_black]KPSS Test: Statistic={kpss_stat:.4f}, p-value={kpss_pvalue:.4f}[/bright_black]")
+		console.print(f"[violet]KPSS Test for {signal_type}: Statistic={kpss_stat:.4f}, p-value={kpss_pvalue:.4f}[/violet]")
 	except ValueError as e:
 		console.print(f"[bright_red]Error in KPSS test: {e}[/bright_red]")
 		return {
@@ -265,13 +267,16 @@ def check_wavelet_stationarity(signal: np.ndarray, max_lag: int = 10, significan
 	# Combined Result Interpretation
 	if adf_pvalue <= significance_level and kpss_pvalue > significance_level:
 		is_stationary = True
+		console.print("[green]Signal is stationary.[/green]")
 	elif adf_pvalue > significance_level and kpss_pvalue <= significance_level:
 		is_stationary = False
+		console.print("[red]Signal is non-stationary.[/red]")
 	elif adf_pvalue <= significance_level and kpss_pvalue <= significance_level:
 		console.print("[yellow]Conflicting results: Further inspection needed.[/yellow]")
 		is_stationary = False
 	else:
 		is_stationary = True
+		console.print("[green]Likely stationary but requires confirmation.[/green]")
 
 	return {
 		"is_stationary": is_stationary,
@@ -281,7 +286,7 @@ def check_wavelet_stationarity(signal: np.ndarray, max_lag: int = 10, significan
 		"KPSS statistic": kpss_stat
 	}
 
-def preprocess_signal_for_stationarity(signal: np.ndarray, max_lag: int = 10, significance_level: float = 0.05) -> tuple:
+def preprocess_signal_for_stationarity(signal: np.ndarray, signal_type: str, max_lag: int = 10, significance_level: float = 0.05) -> tuple:
 	"""
 	Preprocess a signal to achieve stationarity by applying detrending or differencing if necessary. The function first checks the stationarity of the input signal using the Augmented Dickey-Fuller and Kwiatkowski-Phillips-Schmidt-Shin tests. If the signal is non-stationary, it applies detrending and differencing sequentially until the signal becomes stationary.
 
@@ -291,6 +296,8 @@ def preprocess_signal_for_stationarity(signal: np.ndarray, max_lag: int = 10, si
 	-----------
 	signal : np.ndarray
 		The input signal.
+	signal_type : str
+		The type of signal being analyzed (e.g., "raw", "smoothed").
 	max_lag : int, optional
 		Maximum lag for the ADF test.
 	significance_level : float, optional
@@ -302,7 +309,7 @@ def preprocess_signal_for_stationarity(signal: np.ndarray, max_lag: int = 10, si
 		- processed_signal (np.ndarray): The processed signal (stationary if preprocessing is successful).
 		- stationarity_results (dict): Results of the stationarity tests.
 	"""
-	stationarity_result = check_wavelet_stationarity(signal, max_lag, significance_level)
+	stationarity_result = check_wavelet_stationarity(signal, signal_type, max_lag, significance_level)
 	processed_signal = signal  # Start with the original signal
 
 	if stationarity_result["is_stationary"]:
@@ -313,7 +320,7 @@ def preprocess_signal_for_stationarity(signal: np.ndarray, max_lag: int = 10, si
 	detrended_signal = apply_detrending(signal, method="linear")
 	
 	# Re-check stationarity after detrending
-	stationarity_result = check_wavelet_stationarity(detrended_signal, max_lag, significance_level)
+	stationarity_result = check_wavelet_stationarity(detrended_signal, signal_type, max_lag, significance_level)
 	if stationarity_result["is_stationary"]:
 		console.print("[bright_green]Signal is stationary after detrending.[/bright_green]")
 		return detrended_signal, stationarity_result
@@ -322,7 +329,7 @@ def preprocess_signal_for_stationarity(signal: np.ndarray, max_lag: int = 10, si
 	differenced_signal = apply_differencing(detrended_signal, order=1)
 	
 	# Final stationarity check
-	stationarity_result = check_wavelet_stationarity(differenced_signal, max_lag, significance_level)
+	stationarity_result = check_wavelet_stationarity(differenced_signal, signal_type, max_lag, significance_level)
 	if stationarity_result["is_stationary"]:
 		console.print("[bright_green]Signal is stationary after differencing.[/bright_green]")
 		return differenced_signal, stationarity_result
@@ -354,7 +361,7 @@ def filter_wavelets(wavelets: list, exclude_complex: bool = True) -> list:
 		return filtered_wavelets
 	return wavelets
 
-def normalize_weights_dynamically(metrics: list, weights: dict, results_df: pd.DataFrame, ranking_config: dict, threshold:float=0.9, shared_weight_factor:float=0.7, specific_weight_factor:float=0.3) -> tuple:
+def normalize_weights_dynamically(existing_metrics: list, weights: dict, results_df: pd.DataFrame, ranking_config: dict, threshold:float=0.9, shared_weight_factor:float=0.7, specific_weight_factor:float=0.3) -> tuple:
 	"""
 	This function dynamically normalize weights for metrics based on variance, presence, and distribution across shared and specific metrics. It ensures that metrics are appropriately prioritized, reflecting their relevance and availability, while also maintaining consistency across all metrics. It first checks the variance and presence of each metric. Variance reflects the amount of variation in a metric across the dataset. Metrics with low variance may not provide meaningful distinctions between wavelet configurations, as they exhibit minimal variability. Presence indicates the proportion of data rows where the metric is non-null. Metrics with higher presence values are more widely applicable and thus hold more weight in decision-making. 
 	
@@ -384,6 +391,7 @@ def normalize_weights_dynamically(metrics: list, weights: dict, results_df: pd.D
 	ranking_config : dict
 		Updated ranking configuration with normalized weights.
 	"""
+	metrics = [metric for metric in existing_metrics if metric in results_df.columns]
 	# Step 1: Compute Variance and Presence
 	metric_variances = results_df[metrics].var()
 	metric_presence = results_df[metrics].notna().mean()
@@ -431,13 +439,17 @@ def normalize_weights_dynamically(metrics: list, weights: dict, results_df: pd.D
 		normalized_weights[metric] = (
 			normalized_weights[metric] / shared_total_weight * shared_weight_factor
 		)
-		ranking_config["metrics"][metric]["was_shared"] = True
+		for metric_config in ranking_config["metrics"]:
+			if metric_config["metric"] == metric:
+				metric_config["was_shared"] = True
 
 	for metric in specific_metrics:
 		normalized_weights[metric] = (
 			normalized_weights[metric] / specific_total_weight * specific_weight_factor
 		)
-		ranking_config["metrics"][metric]["was_specific"] = True
+		for metric_config in ranking_config["metrics"]:
+			if metric_config["metric"] == metric:
+				metric_config["was_specific"] = True
 
 	# Normalize all weights to sum to 1
 	total_weight = sum(normalized_weights.values())
@@ -563,19 +575,25 @@ def determine_best_wavelet_representation(
 	for metric in metrics_to_remove:
 		avg_value = results_df[metric].mean()
 		std_value = results_df[metric].std()
-		ranking_config["metrics"][metric]["ignore_metric"] = True
-		ranking_config["metrics"][metric]["removal_reason"] = f"Low variance (std: {std_value:.6f}, mean: {avg_value:.6f})"
+		for metric_config in ranking_config["metrics"]:
+			if metric_config["metric"] == metric:
+				metric_config["ignore_metric"] = True
+				metric_config["removal_reason"] = f"Low variance (std: {std_value:.6f}, mean: {avg_value:.6f})"
 
-		console.print(
-			f"[yellow]Excluding '{metric}' from analysis due to low variance "
-			f"(std: {std_dev:.6f}, mean: {avg_value:.6f}).[/yellow]"
-		)
+				console.print(
+					f"[yellow]Excluding '{metric}' from analysis due to low variance "
+					f"(std: {std_value:.6f}, mean: {avg_value:.6f}).[/yellow]"
+				)
 
 	# Log-transform extreme values in `wavelet_energy_entropy` if necessary
 	if 'wavelet_energy_entropy' in results_df.columns:
 		if results_df['wavelet_energy_entropy'].min() < 0:
 			console.print(f"[yellow]Log-transforming `wavelet_energy_entropy` due to negative values.[/yellow]")
 			results_df['wavelet_energy_entropy'] = np.log1p(np.abs(results_df['wavelet_energy_entropy']))
+			for metric_config in ranking_config["metrics"]:
+				if metric_config["metric"] == 'wavelet_energy_entropy':
+					metric_config["was_log_transformed"] = True
+
 		else:
 			console.print(f"[green]No log-transform needed for `wavelet_energy_entropy`. All values are non-negative.[/green]")
 
@@ -643,7 +661,7 @@ def determine_best_wavelet_representation(
 
 	# Normalize weights
 	updated_metrics = [
-		metric_config["metric"] for metric_config in ranking_config["metrics"] if not metric_config.get("ignore_metric", False)
+		metric_config["metric"] for metric_config in ranking_config["metrics"] if not metric_config.get("ignore_metric", False) and metric_config["metric"] in results_df.columns
 	]
 	normalized_weights, updated_ranking_config = normalize_weights_dynamically(updated_metrics, weights, normalized_df, ranking_config)
 
@@ -752,20 +770,8 @@ def compare_and_rank_wavelet_metrics(
 
 	The next step is to repeat the process for the results from DWT, CWT, and SWT, which are combined into a single DataFrame. If compare_top_subset is set to True, only the top subset of results is compared, which is the default primarily for speed and efficiency. The top subset is typically sufficient for identifying the best configurations, and it reduces the computational burden of processing the full results. The combined results are then ranked and compared to determine the best overall wavelet representation across all types, with again all three files saved. The best combined results are returned, which contain the best wavelet configuration.
 	"""
-	if weights is None:
-		weights = {
-			'wavelet_mse': 0.2,
-			'wavelet_psnr': 0.3,
-			'wavelet_energy_entropy': 0.2,
-			'wavelet_sparsity': 0.2,
-			'wavelet_entropy': 0.1,
-			'smoothness': 0.1,
-			'correlation': 0.1,
-			'avg_variance_across_levels': 0.1,
-			'emd_value': 0.2,
-			'kl_divergence': 0.2,
-		}
 
+	modes = pywt.Modes.modes
 	# Define wavelet types and their evaluation functions
 	wavelet_types = {
 		"DWT": {
@@ -783,17 +789,22 @@ def compare_and_rank_wavelet_metrics(
 	}
 
 	# Helper function to process wavelets
-	def process_wavelet_type(wavelet_type, wavelet_info, signal, signal_type):
-		try:
+	def process_wavelet_type(wavelet_type, wavelet_info, signal, modes, signal_type):
+		# try:
+		if wavelet_type == "DWT":
+			results, skipped_results = wavelet_info["evaluate"](signal, wavelet_info["wavelets"], modes, signal_type)
+			
+		else:
 			results, skipped_results = wavelet_info["evaluate"](signal, wavelet_info["wavelets"], signal_type)
-		except Exception as e:
-			console.print(f"[bright_red]Error evaluating {wavelet_type}: {e}[/bright_red]")
-			results, skipped_results = pd.DataFrame(), pd.DataFrame()
+		# except Exception as e:
+		# 	console.print(f"[bright_red]Error evaluating {wavelet_type}: {e}[/bright_red]")
+		# 	results, skipped_results = pd.DataFrame(), pd.DataFrame()
 		return results, skipped_results
 
 	# Collect results across wavelet types and signals
 	all_results = []
 	file_path = wavelet_directory + f"/{volume_id.replace('.', '_')}_"
+	console.print(f"[bright_cyan]Processing file path {file_path}[/bright_cyan]")
 	# Ensure results are non-empty before ranking
 	table_cols = ['wavelet_rank', 'final_wavelet_rank', 'final_score', 'wavelet_norm_weighted_score', 'normalized_diff', 'wavelet_zscore_weighted_score', 'missing_metrics_count']
 	for wavelet_type, wavelet_info in wavelet_types.items():
@@ -810,7 +821,7 @@ def compare_and_rank_wavelet_metrics(
 				continue
 
 			# Process the wavelet type
-			results, skipped_results = process_wavelet_type(wavelet_type, wavelet_info, signal, signal_type)
+			results, skipped_results = process_wavelet_type(wavelet_type, wavelet_info, signal, modes, signal_type)
 			wavelet_results.append(results)
 			wavelet_skipped_results.append(skipped_results)
 		# Save skipped results
@@ -1006,8 +1017,8 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 		os.makedirs(wavelet_analysis_dir, exist_ok=True)
 
 		# Check stationarity for raw and smoothed signals
-		raw_stationarity_result = check_wavelet_stationarity(tokens_raw_signal, max_lag=max_lag, significance_level=significance_level)
-		smoothed_stationarity_result = check_wavelet_stationarity(tokens_smoothed_signal, max_lag=max_lag, significance_level=significance_level)
+		raw_stationarity_result = check_wavelet_stationarity(tokens_raw_signal, signal_type="raw", max_lag=max_lag, significance_level=significance_level)
+		smoothed_stationarity_result = check_wavelet_stationarity(tokens_smoothed_signal, signal_type="smoothed",max_lag=max_lag, significance_level=significance_level)
 		wavelet_transform_settings = {
 			'raw': {
 				'is_stationary': raw_stationarity_result["is_stationary"],
@@ -1023,7 +1034,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 		if not raw_stationarity_result["is_stationary"]:
 			console.print("[yellow]Raw signal is not stationary. Attempting preprocessing...[/yellow]")
 			tokens_raw_signal, raw_stationarity_result = preprocess_signal_for_stationarity(
-				tokens_raw_signal, max_lag=max_lag, significance_level=significance_level
+				tokens_raw_signal, signal_type="raw", max_lag=max_lag, significance_level=significance_level
 			)
 			if not raw_stationarity_result["is_stationary"]:
 				console.print("[red]Failed to preprocess raw signal. Skipping DWT/SWT for raw signal.[/red]")
@@ -1034,7 +1045,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 		if not smoothed_stationarity_result["is_stationary"]:
 			console.print("[yellow]Smoothed signal is not stationary. Attempting preprocessing...[/yellow]")
 			tokens_smoothed_signal, smoothed_stationarity_result = preprocess_signal_for_stationarity(
-				tokens_smoothed_signal, max_lag=max_lag, significance_level=significance_level
+				tokens_smoothed_signal, signal_type="smoothed", max_lag=max_lag, significance_level=significance_level
 			)
 			if not smoothed_stationarity_result["is_stationary"]:
 				console.print("[red]Failed to preprocess smoothed signal. Skipping DWT/SWT for smoothed signal.[/red]")
@@ -1047,14 +1058,14 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 		
 
 		# Log stationarity results for both signals
-		volume_data.update({
+		volume_data = {
 			'raw_stationarity': raw_stationarity_result["is_stationary"],
 			'raw_adf_pvalue': raw_stationarity_result.get("ADF p-value"),
 			'raw_kpss_pvalue': raw_stationarity_result.get("KPSS p-value"),
 			'smoothed_stationarity': smoothed_stationarity_result["is_stationary"],
 			'smoothed_adf_pvalue': smoothed_stationarity_result.get("ADF p-value"),
 			'smoothed_kpss_pvalue': smoothed_stationarity_result.get("KPSS p-value"),
-		})
+		}
 
 		# Calculate wavelet metrics and signal metrics
 		best_wavelet_config = compare_and_rank_wavelet_metrics(
@@ -1115,7 +1126,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 		merged_signals_dict = merged_signals.iloc[0].to_dict()
 
 		# Append frequencies and metadata
-		volume_data = {
+		volume_data.update({
 			'htid': merged_expanded_df['htid'].unique()[0],
 			'lowercase_periodical_name': volume['lowercase_periodical_name'],
 			'avg_tokens': merged_expanded_df['tokens_per_page'].mean(),
@@ -1132,7 +1143,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 			'missing_issues': missing_issues,
 			'volume_classification': volume['volume_classification'],
 			'title_classification': volume['title_classification'],
-		}
+		})
 		
 		# Merge the best_wavelet_dict with volume_data
 		volume_data.update(best_wavelet_dict)
@@ -1302,6 +1313,6 @@ if __name__ == "__main__":
 	filter_implied_zeroes = True
 	should_rerun_code = True
 	should_load_existing_data = False
-	should_only_use_annotated_periodicals = False
+	should_only_use_annotated_periodicals = True
 	parallelization = True
 	generate_token_frequency_analysis(filter_greater_than_numbers, filter_implied_zeroes,  should_only_use_annotated_periodicals, should_load_existing_data, should_rerun_code, parallelization)
