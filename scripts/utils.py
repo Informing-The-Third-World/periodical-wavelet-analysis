@@ -10,6 +10,7 @@ from rich.table import Table
 import sys
 import re
 from tqdm import tqdm
+import numpy as np
 
 console = Console()
 
@@ -365,6 +366,135 @@ def process_file(file_path: str, is_preidentified_periodical: bool, should_filte
 
 		generate_table(counts_per_annotated_issue, "Counts per Annotated Issue")
 	return expanded_df, subset_digits, grouped_df
+
+## DATA PROCESSING FUNCTIONS
+def process_tokens(file_path: str, preidentified_periodical: bool, should_filter_greater_than_numbers: bool, should_filter_implied_zeroes: bool) -> tuple:
+	"""
+	Processes and cleans token-level data extracted from OCR-processed periodicals, preparing it for wavelet analysis.
+
+	The function begins by reading token data from the specified file and applies the process_file function to expand tokens while filtering based on the provided flags. Metadata columns (e.g., enumeration_chronology, pub_date) are included by merging with a corresponding metadata CSV if available. For pre-identified periodicals, additional metadata fields such as start_issue and end_issue are included, and only relevant columns are retained.
+
+	Token-level data is merged with digit counts to create a comprehensive DataFrame, with missing values filled as zeros for consistency. Token and digit signals are smoothed using a moving average (window size = 5) and then standardized by subtracting the mean and dividing by the standard deviation. As a sanity check, the first two rows of the processed DataFrame are printed using the generate_table utility. Finally, raw and smoothed token frequency signals are extracted as 1D arrays, ensuring no NaN or infinite values, and are prepared for further analysis. We add in a flag for missing values to the DataFrame to track any replacements.
+
+	Core Assumptions:
+	- Input files must include required columns (e.g., tokens_per_page, page_number), and a metadata CSV must exist for token data if columns like enumeration_chronology are missing.
+	- Pre-identified periodicals provide additional metadata fields that the function incorporates.
+	- The smoothing process (centered moving average, window size = 5) assumes relatively uniform page lengths for meaningful results.
+	- Missing values are replaced with zeros to ensure compatibility with downstream tools.
+
+	Parameters
+	----------
+	file_path : str
+		The path to the file containing the token data.
+	preidentified_periodical : bool
+		Flag indicating whether the periodical is pre-identified.
+	should_filter_greater_than_numbers : bool
+		Flag indicating whether to filter out numbers greater than the max possible page number.
+	should_filter_implied_zeroes : bool
+		Flag indicating whether to filter out implied zeroes.
+
+	Returns
+	-------
+	tuple
+		A tuple containing:
+		- `merged_expanded_df` (pd.DataFrame): A DataFrame with token-level data, metadata, 
+		  and processed signal columns, including smoothed and standardized token and digit signals.
+		- `grouped_df` (pd.DataFrame): A grouped version of the expanded DataFrame, often 
+		  useful for aggregating data by specific columns.
+		- `tokens_raw_signal` (np.ndarray): The raw token frequency signal as a 1D array, 
+		  ready for further analysis (e.g., FFT or wavelet transformations).
+		- `tokens_smoothed_signal` (np.ndarray): The smoothed token frequency signal as a 1D 
+		  array, obtained via a moving average.
+	"""
+	expanded_df, subset_digits, grouped_df = process_file(file_path, preidentified_periodical, should_filter_greater_than_numbers, should_filter_implied_zeroes)
+	
+	# Merge metadata if not already present
+	if 'enumeration_chronology' not in expanded_df.columns:
+		metadata_file_path = file_path.replace("_individual_tokens.csv", "_metadata.csv")
+		metadata_df = read_csv_file(metadata_file_path)
+		expanded_df = expanded_df.merge(metadata_df, on=['periodical_name', 'htid', 'record_url'], how='left')
+	
+	subset_cols = ['page_number', 'tokens_per_page', 'original_page_number', 'htid', 'title', 'pub_date', 'enumeration_chronology', 'type_of_resource', 'title', 'date_created', 'pub_date', 'language', 'access_profile', 'isbn', 'issn', 'lccn', 'oclc', 'page_count', 'feature_schema_version', 'access_rights', 'alternate_title', 'category', 'genre_ld', 'genre', 'contributor_ld', 'contributor', 'handle_url', 'source_institution_ld', 'source_institution', 'lcc', 'type', 'is_part_of', 'last_rights_update_date', 'pub_place_ld', 'pub_place', 'main_entity_of_page', 'publisher_ld','publisher', 'record_url', 'periodical_name'] 
+	if preidentified_periodical:
+		subset_cols = subset_cols + ['start_issue', 'end_issue', 'type_of_page']
+	# Select relevant columns and drop duplicates
+	subset_expanded_df = expanded_df[subset_cols].drop_duplicates()
+	
+	min_subset_digits = subset_digits[['original_page_number', 'digits_per_page', 'page_number']].drop_duplicates()
+	
+	# Merge the token and digit data
+	merged_expanded_df = subset_expanded_df.merge(min_subset_digits, on=['original_page_number', 'page_number'], how='left')
+	merged_expanded_df['tokens_per_page'] = merged_expanded_df['tokens_per_page'].fillna(0)
+	merged_expanded_df['digits_per_page'] = merged_expanded_df['digits_per_page'].fillna(0)
+	merged_expanded_df = merged_expanded_df.sort_values(by='page_number')
+	
+	# Apply smoothing (moving average)
+	merged_expanded_df['smoothed_tokens_per_page'] = (
+		merged_expanded_df['tokens_per_page']
+		.where(merged_expanded_df['tokens_per_page'] > 0)
+		.rolling(window=5, center=True)
+		.mean()
+		.fillna(0)
+	)
+	# Standardize smoothed signals
+	merged_expanded_df['standardized_tokens_per_page'] = (
+		(merged_expanded_df['smoothed_tokens_per_page'] - merged_expanded_df['smoothed_tokens_per_page'].mean()) 
+		/ merged_expanded_df['smoothed_tokens_per_page'].std()
+	)
+	merged_expanded_df['smoothed_digits_per_page'] = (
+		merged_expanded_df['digits_per_page']
+		.where(merged_expanded_df['digits_per_page'] > 0)
+		.rolling(window=5, center=True)
+		.mean()
+		.fillna(0)
+	)
+
+	merged_expanded_df['standardized_digits_per_page'] = (
+		(merged_expanded_df['smoothed_digits_per_page'] - merged_expanded_df['smoothed_digits_per_page'].mean()) 
+		/ merged_expanded_df['smoothed_digits_per_page'].std()
+	)
+	
+	table_cols = ['page_number', 'tokens_per_page', 'smoothed_tokens_per_page', 'standardized_tokens_per_page', 'digits_per_page', 'smoothed_digits_per_page', 'standardized_digits_per_page'] 
+	table_title = "Token and Digit Data"
+	generate_table(merged_expanded_df[table_cols].head(2), table_title)
+	
+	# Add flags for NaN replacement
+	merged_expanded_df['tokens_missing_flag'] = merged_expanded_df['tokens_per_page'].isna().astype(int)
+	merged_expanded_df['digits_missing_flag'] = merged_expanded_df['digits_per_page'].isna().astype(int)
+	num_tokens_nans = merged_expanded_df['tokens_missing_flag'].sum()
+	num_digits_nans = merged_expanded_df['digits_missing_flag'].sum()
+
+	console.print(
+		f"[yellow]Replaced {num_tokens_nans} missing values in 'tokens_per_page' "
+		f"and {num_digits_nans} missing values in 'digits_per_page' with 0.[/yellow]"
+	)
+
+	# Normalize signals for FFT and autocorrelation
+	tokens_raw_signal = np.nan_to_num(merged_expanded_df['tokens_per_page'].values, nan=0.0, posinf=0.0, neginf=0.0)
+	tokens_smoothed_signal = np.nan_to_num(merged_expanded_df['smoothed_tokens_per_page'].values, nan=0.0, posinf=0.0, neginf=0.0)
+	(tokens_raw_signal)
+	console.print(f"Raw Signal Length: {len(tokens_raw_signal)}", style="bright_green")
+	console.print(f"Smoothed Signal Length: {len(tokens_smoothed_signal)}", style="bright_green")
+	return merged_expanded_df, grouped_df, tokens_raw_signal, tokens_smoothed_signal
+
+def check_if_actual_issue(row: pd.Series, grouped_df: pd.DataFrame) -> bool:
+	"""
+	Check if the given row corresponds to an actual issue.
+
+	Parameters
+	----------
+	row : pd.Series
+		The row of the DataFrame being checked.
+	grouped_df : pd.DataFrame
+		Grouped DataFrame with issue boundaries.
+
+	Returns
+	-------
+	bool
+		True if the page is part of an actual issue, False otherwise.
+	"""
+	subset_grouped_df = grouped_df[grouped_df.first_page == row.page_number]
+	return len(subset_grouped_df) > 0
 
 if __name__ == '__main__':
 	set_data_directory_path('/Users/zleblanc/Informing-The-Third-World/periodical-collection-curation')

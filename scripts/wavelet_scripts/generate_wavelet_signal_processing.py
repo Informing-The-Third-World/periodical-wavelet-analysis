@@ -239,6 +239,16 @@ def process_dwt_wavelet(signal: np.ndarray, wavelet: str, modes: list, signal_ty
 					emd_value = wasserstein_distance(signal, reconstructed_signal)
 					kl_div_value = sum(rel_entr(signal, reconstructed_signal + 1e-12))
 
+					# Calculate reconstructed signal metrics
+					reconstructed_signal_metrics = calculate_signal_metrics(
+						tokens_signal=reconstructed_signal,
+						use_signal_type=f"{signal_type}",
+						min_tokens=np.min(signal),
+						prominence=0.1 * np.std(reconstructed_signal),
+						distance=max(1, len(reconstructed_signal) // 20),
+						verbose=False
+					)
+
 					results.append({
 						'wavelet': wavelet,
 						'wavelet_level': level,
@@ -252,7 +262,8 @@ def process_dwt_wavelet(signal: np.ndarray, wavelet: str, modes: list, signal_ty
 						'signal_type': signal_type,
 						'emd_value': emd_value,
 						'kl_divergence': kl_div_value,
-						**additional_features
+						**additional_features,
+						**reconstructed_signal_metrics
 					})
 				except Exception as e:
 					skipped_wavelets.append({
@@ -414,6 +425,16 @@ def process_cwt_wavelet(signal: np.ndarray, wavelet: str, scales: np.ndarray, si
 		else:
 			emd_value = wasserstein_distance(signal, reconstructed_signal)
 			kl_div_value = sum(rel_entr(signal, reconstructed_signal))
+
+		# Calculate reconstructed signal metrics
+		reconstructed_signal_metrics = calculate_signal_metrics(
+			tokens_signal=reconstructed_signal,
+			use_signal_type=f"{signal_type}",
+			min_tokens=np.min(signal),
+			prominence=0.1 * np.std(reconstructed_signal),
+			distance=max(1, len(reconstructed_signal) // 20),
+			verbose=False
+		)
 		# Append Results
 		results.append({
 			'signal_type': signal_type,
@@ -427,7 +448,8 @@ def process_cwt_wavelet(signal: np.ndarray, wavelet: str, scales: np.ndarray, si
 			'emd_value': emd_value,
 			'kl_divergence': kl_div_value,
 			'is_complex': is_complex,
-			**additional_features
+			**additional_features,
+			**reconstructed_signal_metrics
 		})
 	except Exception as e:
 		skipped_results.append({'wavelet': wavelet, 'error': str(e), 'signal_length': len(signal), 'signal_type': signal_type, 'scales_used': len(scales)})
@@ -591,6 +613,15 @@ def process_swt_wavelet(signal: np.ndarray, wavelet: str, signal_type: str, max_
 
 		# Compute additional features
 		additional_features = compute_additional_wavelet_features(coeffs, reconstructed_signal, signal)
+		# Calculate reconstructed signal metrics
+		reconstructed_signal_metrics = calculate_signal_metrics(
+			tokens_signal=reconstructed_signal,
+			use_signal_type=f"{signal_type}",
+			min_tokens=np.min(signal),
+			prominence=0.1 * np.std(reconstructed_signal),
+			distance=max(1, len(reconstructed_signal) // 20),
+			verbose=False
+		)
 
 		# Calculate KL Divergence and EMD
 		emd_value = wasserstein_distance(signal, reconstructed_signal)
@@ -610,7 +641,8 @@ def process_swt_wavelet(signal: np.ndarray, wavelet: str, signal_type: str, max_
 			'padded': is_padded,
 			'emd_value': emd_value,
 			'kl_divergence': kl_div_value,
-			**additional_features
+			**additional_features,
+			**reconstructed_signal_metrics
 		})
 
 	except Exception as e:

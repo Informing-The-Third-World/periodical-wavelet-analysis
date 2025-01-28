@@ -9,21 +9,20 @@ import json
 import pandas as pd
 import numpy as np
 import altair as alt
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 from rich.console import Console
 import pywt
 from sklearn.preprocessing import RobustScaler
+from sklearn.metrics import mean_squared_error
 from statsmodels.tsa.stattools import adfuller, kpss
 from scipy.signal import detrend
+from scipy.spatial.distance import cosine
 
 # Local application imports
 sys.path.append("../..")
-from scripts.utils import read_csv_file, get_data_directory_path, save_chart, process_file, generate_table
+from scripts.utils import read_csv_file, get_data_directory_path, save_chart, generate_table, process_tokens
 from scripts.wavelet_scripts.generate_wavelet_signal_processing import evaluate_dwt_performance, evaluate_dwt_performance_parallel, evaluate_cwt_performance, evaluate_cwt_performance_parallel, evaluate_swt_performance, evaluate_swt_performance_parallel, calculate_signal_metrics
-
-# Disable max rows for Altair
-alt.data_transformers.disable_max_rows()
+from scripts.wavelet_scripts.generate_wavelet_plots import plot_volume_frequencies_matplotlib, plot_tokens_per_page, plot_annotated_periodicals
 
 # Ignore warnings
 warnings.filterwarnings('ignore')
@@ -31,134 +30,6 @@ warnings.filterwarnings('ignore')
 # Initialize console
 console = Console()
 
-## DATA PROCESSING FUNCTIONS
-def process_tokens(file_path: str, preidentified_periodical: bool, should_filter_greater_than_numbers: bool, should_filter_implied_zeroes: bool) -> tuple:
-	"""
-	Processes and cleans token-level data extracted from OCR-processed periodicals, preparing it for wavelet analysis.
-
-	The function begins by reading token data from the specified file and applies the process_file function to expand tokens while filtering based on the provided flags. Metadata columns (e.g., enumeration_chronology, pub_date) are included by merging with a corresponding metadata CSV if available. For pre-identified periodicals, additional metadata fields such as start_issue and end_issue are included, and only relevant columns are retained.
-
-	Token-level data is merged with digit counts to create a comprehensive DataFrame, with missing values filled as zeros for consistency. Token and digit signals are smoothed using a moving average (window size = 5) and then standardized by subtracting the mean and dividing by the standard deviation. As a sanity check, the first two rows of the processed DataFrame are printed using the generate_table utility. Finally, raw and smoothed token frequency signals are extracted as 1D arrays, ensuring no NaN or infinite values, and are prepared for further analysis. We add in a flag for missing values to the DataFrame to track any replacements.
-
-	Core Assumptions:
-	- Input files must include required columns (e.g., tokens_per_page, page_number), and a metadata CSV must exist for token data if columns like enumeration_chronology are missing.
-	- Pre-identified periodicals provide additional metadata fields that the function incorporates.
-	- The smoothing process (centered moving average, window size = 5) assumes relatively uniform page lengths for meaningful results.
-	- Missing values are replaced with zeros to ensure compatibility with downstream tools.
-
-	Parameters
-	----------
-	file_path : str
-		The path to the file containing the token data.
-	preidentified_periodical : bool
-		Flag indicating whether the periodical is pre-identified.
-	should_filter_greater_than_numbers : bool
-		Flag indicating whether to filter out numbers greater than the max possible page number.
-	should_filter_implied_zeroes : bool
-		Flag indicating whether to filter out implied zeroes.
-
-	Returns
-	-------
-	tuple
-		A tuple containing:
-		- `merged_expanded_df` (pd.DataFrame): A DataFrame with token-level data, metadata, 
-		  and processed signal columns, including smoothed and standardized token and digit signals.
-		- `grouped_df` (pd.DataFrame): A grouped version of the expanded DataFrame, often 
-		  useful for aggregating data by specific columns.
-		- `tokens_raw_signal` (np.ndarray): The raw token frequency signal as a 1D array, 
-		  ready for further analysis (e.g., FFT or wavelet transformations).
-		- `tokens_smoothed_signal` (np.ndarray): The smoothed token frequency signal as a 1D 
-		  array, obtained via a moving average.
-	"""
-	expanded_df, subset_digits, grouped_df = process_file(file_path, preidentified_periodical, should_filter_greater_than_numbers, should_filter_implied_zeroes)
-	
-	# Merge metadata if not already present
-	if 'enumeration_chronology' not in expanded_df.columns:
-		metadata_file_path = file_path.replace("_individual_tokens.csv", "_metadata.csv")
-		metadata_df = read_csv_file(metadata_file_path)
-		expanded_df = expanded_df.merge(metadata_df, on=['periodical_name', 'htid', 'record_url'], how='left')
-	
-	subset_cols = ['page_number', 'tokens_per_page', 'original_page_number', 'htid', 'title', 'pub_date', 'enumeration_chronology', 'type_of_resource', 'title', 'date_created', 'pub_date', 'language', 'access_profile', 'isbn', 'issn', 'lccn', 'oclc', 'page_count', 'feature_schema_version', 'access_rights', 'alternate_title', 'category', 'genre_ld', 'genre', 'contributor_ld', 'contributor', 'handle_url', 'source_institution_ld', 'source_institution', 'lcc', 'type', 'is_part_of', 'last_rights_update_date', 'pub_place_ld', 'pub_place', 'main_entity_of_page', 'publisher_ld','publisher', 'record_url', 'periodical_name'] 
-	if preidentified_periodical:
-		subset_cols = subset_cols + ['start_issue', 'end_issue', 'type_of_page']
-	# Select relevant columns and drop duplicates
-	subset_expanded_df = expanded_df[subset_cols].drop_duplicates()
-	
-	min_subset_digits = subset_digits[['original_page_number', 'digits_per_page', 'page_number']].drop_duplicates()
-	
-	# Merge the token and digit data
-	merged_expanded_df = subset_expanded_df.merge(min_subset_digits, on=['original_page_number', 'page_number'], how='left')
-	merged_expanded_df['tokens_per_page'] = merged_expanded_df['tokens_per_page'].fillna(0)
-	merged_expanded_df['digits_per_page'] = merged_expanded_df['digits_per_page'].fillna(0)
-	merged_expanded_df = merged_expanded_df.sort_values(by='page_number')
-	
-	# Apply smoothing (moving average)
-	merged_expanded_df['smoothed_tokens_per_page'] = (
-		merged_expanded_df['tokens_per_page']
-		.where(merged_expanded_df['tokens_per_page'] > 0)
-		.rolling(window=5, center=True)
-		.mean()
-		.fillna(0)
-	)
-	# Standardize smoothed signals
-	merged_expanded_df['standardized_tokens_per_page'] = (
-		(merged_expanded_df['smoothed_tokens_per_page'] - merged_expanded_df['smoothed_tokens_per_page'].mean()) 
-		/ merged_expanded_df['smoothed_tokens_per_page'].std()
-	)
-	merged_expanded_df['smoothed_digits_per_page'] = (
-		merged_expanded_df['digits_per_page']
-		.where(merged_expanded_df['digits_per_page'] > 0)
-		.rolling(window=5, center=True)
-		.mean()
-		.fillna(0)
-	)
-
-	merged_expanded_df['standardized_digits_per_page'] = (
-		(merged_expanded_df['smoothed_digits_per_page'] - merged_expanded_df['smoothed_digits_per_page'].mean()) 
-		/ merged_expanded_df['smoothed_digits_per_page'].std()
-	)
-	
-	table_cols = ['page_number', 'tokens_per_page', 'smoothed_tokens_per_page', 'standardized_tokens_per_page', 'digits_per_page', 'smoothed_digits_per_page', 'standardized_digits_per_page'] 
-	table_title = "Token and Digit Data"
-	generate_table(merged_expanded_df[table_cols].head(2), table_title)
-	
-	# Add flags for NaN replacement
-	merged_expanded_df['tokens_missing_flag'] = merged_expanded_df['tokens_per_page'].isna().astype(int)
-	merged_expanded_df['digits_missing_flag'] = merged_expanded_df['digits_per_page'].isna().astype(int)
-	num_tokens_nans = merged_expanded_df['tokens_missing_flag'].sum()
-	num_digits_nans = merged_expanded_df['digits_missing_flag'].sum()
-
-	console.print(
-		f"[yellow]Replaced {num_tokens_nans} missing values in 'tokens_per_page' "
-		f"and {num_digits_nans} missing values in 'digits_per_page' with 0.[/yellow]"
-	)
-
-	# Normalize signals for FFT and autocorrelation
-	tokens_raw_signal = np.nan_to_num(merged_expanded_df['tokens_per_page'].values, nan=0.0, posinf=0.0, neginf=0.0)
-	tokens_smoothed_signal = np.nan_to_num(merged_expanded_df['smoothed_tokens_per_page'].values, nan=0.0, posinf=0.0, neginf=0.0)
-	(tokens_raw_signal)
-	console.print(f"Raw Signal Length: {len(tokens_raw_signal)}", style="bright_green")
-	console.print(f"Smoothed Signal Length: {len(tokens_smoothed_signal)}", style="bright_green")
-	return merged_expanded_df, grouped_df, tokens_raw_signal, tokens_smoothed_signal
-
-def check_if_actual_issue(row: pd.Series, grouped_df: pd.DataFrame) -> bool:
-	"""
-	Check if the given row corresponds to an actual issue.
-
-	Parameters
-	----------
-	row : pd.Series
-		The row of the DataFrame being checked.
-	grouped_df : pd.DataFrame
-		Grouped DataFrame with issue boundaries.
-
-	Returns
-	-------
-	bool
-		True if the page is part of an actual issue, False otherwise.
-	"""
-	subset_grouped_df = grouped_df[grouped_df.first_page == row.page_number]
-	return len(subset_grouped_df) > 0
 
 ## WAVELET STATIONARITY FUNCTIONS
 def apply_differencing(signal: np.ndarray, order: int = 1) -> np.ndarray:
@@ -478,8 +349,105 @@ def normalize_weights_dynamically(existing_metrics: list, weights: dict, results
 
 	return normalized_weights, ranking_config
 
+def compare_original_reconstructed_metrics(original_df: pd.DataFrame, reconstructed_df: pd.DataFrame, cosine_weight: float = 0.7, diff_weight: float = 0.3) -> pd.DataFrame:
+	"""
+	Compare original and reconstructed signal metrics, compute total scores, and rank results.
+
+	Parameters:
+	----------
+	original_df : pd.DataFrame
+		DataFrame containing the original signal metrics.
+	reconstructed_df : pd.DataFrame
+		DataFrame containing the reconstructed signal metrics.
+	cosine_weight : float
+		Weight for cosine similarity in the total score (default: 0.7).
+	diff_weight : float
+		Weight for diff similarity in the total score (default: 0.3).
+
+	Returns:
+	--------
+	ranked_comparison_df : pd.DataFrame
+		DataFrame sorted by total similarity score, with individual scores included.
+	"""
+	# Handle edge case for empty DataFrames
+	if original_df.empty or reconstructed_df.empty:
+		console.print("[yellow]One or both DataFrames are empty. Returning empty results.[/yellow]")
+		return pd.DataFrame()
+
+	comparison = {}
+	# Generate the metrics as the intersection of the columns in both DataFrames
+	metrics = set(original_df.columns).intersection(set(reconstructed_df.columns))
+	metrics = [metric for metric in metrics if metric not in ["signal_type"]]
+	for metric in metrics:
+		if metric in original_df.columns and metric in reconstructed_df.columns:
+			# Handle array-based columns
+			if isinstance(original_df[metric].iloc[0], str) and original_df[metric].iloc[0].startswith("["):
+				try:
+					# Convert stringified arrays to numpy arrays
+					original_arrays = original_df[metric].apply(eval).apply(np.array)
+					reconstructed_arrays = reconstructed_df[metric].apply(eval).apply(np.array)
+					
+					# Compute similarity measures only if array shapes match
+					cosine_sim = []
+					mse = []
+					for orig, recon in zip(original_arrays, reconstructed_arrays):
+						if len(orig) == len(recon):
+							cosine_sim.append(1 - cosine(orig, recon))
+							mse.append(mean_squared_error(orig, recon))
+						else:
+							cosine_sim.append(np.nan)
+							mse.append(np.nan)
+
+					# Store average similarity scores
+					comparison[f"{metric}_mse"] = np.nanmean(mse)
+					comparison[f"{metric}_cosine_similarity"] = np.nanmean(cosine_sim)
+				except Exception as e:
+					console.print(f"[red]Error processing arrays for metric '{metric}': {e}[/red]")
+					comparison[f"{metric}_mse"] = np.nan
+					comparison[f"{metric}_cosine_similarity"] = np.nan
+			else:
+				# Compute absolute difference for scalar values
+				comparison[f"{metric}_diff"] = (original_df[metric] - reconstructed_df[metric]).abs().mean()
+		else:
+			# Handle missing metrics explicitly
+			console.print(f"[yellow]Metric '{metric}' is missing in one of the DataFrames.[/yellow]")
+			comparison[f"{metric}_mse"] = np.nan
+			comparison[f"{metric}_cosine_similarity"] = np.nan
+			comparison[f"{metric}_diff"] = np.nan
+
+	# Convert to DataFrame
+	comparison_df = pd.DataFrame([comparison])
+
+	# Compute total score for ranking
+	total_scores = []
+	for _, row in comparison_df.iterrows():
+		# Average cosine similarity across all metrics
+		cosine_score = np.nanmean([
+			row[col] for col in comparison_df.columns if col.endswith("cosine_similarity")
+		])
+		# Average absolute differences across all metrics
+		diff_score = np.nanmean([
+			row[col] for col in comparison_df.columns if col.endswith("diff")
+		])
+
+		# Normalize diff (invert for scoring: lower diff is better)
+		normalized_diff_score = 1 / (1 + diff_score) if diff_score is not None else 0
+
+		# Compute weighted total score
+		total_score = (cosine_weight * cosine_score if cosine_score is not None else 0) + \
+					  (diff_weight * normalized_diff_score if normalized_diff_score is not None else 0)
+		total_scores.append(total_score)
+
+	# Add total scores to the DataFrame
+	comparison_df["reconstruction_score"] = total_scores
+
+	# Sort by total score in descending order
+	ranked_comparison_df = comparison_df.sort_values(by="reconstruction_score", ascending=False).reset_index(drop=True)
+
+	return ranked_comparison_df
+
 def determine_best_wavelet_representation(
-	results_df: pd.DataFrame, signal_type: str, weights: dict = None, is_combined: bool = False, epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05, percentage_of_results: float = 0.1
+	results_df: pd.DataFrame, signal_type: str, original_signal_metrics_df: pd.DataFrame, weights: dict = None, is_combined: bool = False, epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05, percentage_of_results: float = 0.1, ignore_low_variance: bool = False
 ) -> tuple:
 	"""
 	This function determines the best wavelet representation by normalizing, combining scores, and ranking based on provided metrics. It starts by using either the passed weights or the existing default ones. Then it creates a ranking_config dictionary to log the decision-making process, including initial weights, transformations, and exclusions of metrics. Next we start checking for zero or near-zero variance metrics because they do not provide meaningful information for distinguishing between wavelet configurations. Any excluded metric is logged in the ranking_config with it's mean and standard deviation. After that step, we check if we need to log-transform negative values in `wavelet_energy_entropy`, which can distort normalization and weight calculations. The log transformation compresses large ranges while handling negatives, stabilizing the metric for comparison. This step assumes the metric’s distribution benefits from log-scaling to better represent its variation. Finally, we handle complex-valued metrics by taking the absolute value. Complex numbers might arise in certain wavelet calculations (e.g., from Fourier-based transforms). Magnitudes retain the essential information while making the data compatible with subsequent operations. 
@@ -568,22 +536,27 @@ def determine_best_wavelet_representation(
 		})
 
 	# Dynamically handle zero or near-zero variance metrics
-	metrics_to_remove = [
-		metric for metric in weights
-		if metric in results_df.columns and results_df[metric].std() <= epsilon_threshold
-	]
-	for metric in metrics_to_remove:
-		avg_value = results_df[metric].mean()
-		std_value = results_df[metric].std()
-		for metric_config in ranking_config["metrics"]:
-			if metric_config["metric"] == metric:
-				metric_config["ignore_metric"] = True
-				metric_config["removal_reason"] = f"Low variance (std: {std_value:.6f}, mean: {avg_value:.6f})"
-
+	for metric_config in ranking_config["metrics"]:
+		metric = metric_config["metric"]
+		if metric in results_df.columns:
+			std_dev = results_df[metric].std()
+			avg_value = results_df[metric].mean()
+			
+			# Adjust weights instead of outright removal
+			if std_dev <= epsilon_threshold:
 				console.print(
-					f"[yellow]Excluding '{metric}' from analysis due to low variance "
-					f"(std: {std_value:.6f}, mean: {avg_value:.6f}).[/yellow]"
+					f"[yellow]Low variance for '{metric}' (std: {std_dev:.6f}, mean: {avg_value:.6f}). Adjusting weight.[/yellow]"
 				)
+				metric_config["ignore_metric"] = False
+				metric_config["removal_reason"] = f"Low variance (std: {std_dev:.6f}, mean: {avg_value:.6f})"
+				weights[metric] *= 0.5  # Reduce influence of low-variance metrics
+				if ignore_low_variance:
+					metric_config["ignore_metric"] = True
+					metric_config["removal_reason"] = f"Low variance (std: {std_dev:.6f}, mean: {avg_value:.6f})"
+					console.print(
+						f"[yellow]Excluding '{metric}' from analysis due to low variance "
+						f"(std: {std_dev:.6f}, mean: {avg_value:.6f}).[/yellow]"
+					)
 
 	# Log-transform extreme values in `wavelet_energy_entropy` if necessary
 	if 'wavelet_energy_entropy' in results_df.columns:
@@ -754,6 +727,7 @@ def compare_and_rank_wavelet_metrics(
 	smoothed_signal: np.ndarray,
 	wavelet_directory: str,
 	volume_id: str,
+	signal_metrics_df: pd.DataFrame,
 	wavelet_transform_settings: dict,
 	use_parallel: bool = True,
 	weights: dict = None,
@@ -829,20 +803,21 @@ def compare_and_rank_wavelet_metrics(
 		skipped_df = pd.concat(wavelet_skipped_results, ignore_index=True)
 		if not skipped_df.empty:
 			skipped_df.to_csv(
-				f"{file_path}{wavelet_type.lower()}_{signal_type}_skipped_results.csv",
+				f"{file_path}{wavelet_type.lower()}_skipped_results.csv",
 				index=False
 			)
 
 		# Save results and rank them
 		if not results_df.empty:
+			results_df['wavelet_type'] = wavelet_type
 			best_config, ranked, subset_ranked, correlation_score, ranking_config = determine_best_wavelet_representation(
-				results_df, wavelet_type, weights, False
+				results_df, wavelet_type, signal_metrics_df, weights, False
 			)
 			
 			suffix = f"{wavelet_type.lower()}_{signal_type}"
 			ranked.to_csv(f"{file_path}full_{wavelet_type.lower()}_results.csv", index=False)
 			subset_ranked.to_csv(f"{file_path}subset_{wavelet_type.lower()}_results.csv.csv", index=False)
-			with open(f"{file_path}_{wavelet_type.lower()}_ranking_config.json", "w") as f:
+			with open(f"{file_path}{wavelet_type.lower()}_ranking_config.json", "w") as f:
 				json.dump(ranking_config, f, indent=4)
 			generate_table(best_config[ ['wavelet', 'signal_type'] + table_cols], f"Best {wavelet_type} Wavelet Configuration (Correlation: {correlation_score:.2f})")
 			# Append to all_results
@@ -859,122 +834,18 @@ def compare_and_rank_wavelet_metrics(
 	# Perform final ranking
 	if not combined_all_results.empty:
 		best_combined, ranked_combined, subset_combined, combined_correlation, combined_config = determine_best_wavelet_representation(
-			combined_all_results, "Combined", weights, True
+			combined_all_results, "Combined", signal_metrics_df, weights, True
 		)
 		suffix = "" if compare_top_subset else "all_"
 		ranked_combined.to_csv(f"{file_path}combined_{suffix}results.csv", index=False)
 		subset_combined.to_csv(f"{file_path}combined_{suffix}subset.csv", index=False)
-		with open(f"{file_path}_combined_{suffix}ranking_config.json", "w") as f:
+		with open(f"{file_path}combined_{suffix}ranking_config.json", "w") as f:
 			json.dump(combined_config, f, indent=4)
 		generate_table(best_combined[ ['wavelet', 'signal_type'] + table_cols], f"Best Combined Wavelet Configuration (Correlation: {combined_correlation:.2f})")
 		return best_combined
 	else:
 		console.print("[red]No valid wavelet configurations found.[/red]")
 		return pd.DataFrame()
-
-## PLOTTING FUNCTIONS
-
-def plot_volume_frequencies_matplotlib(volume_frequencies: list, periodical_name: str, output_dir: str):
-	"""
-	Plot all volume frequencies on the same graph and save as an image. Hard coded to use raw tokens positive frequencies and amplitudes but can be modified.
-
-	Parameters:
-	- volume_frequencies: List of volume frequency data.
-	- periodical_name: Name of the periodical for the title.
-	- output_dir: Directory to save the plot.
-	"""
-	plt.figure(figsize=(14, 8))
-	for volume in volume_frequencies:
-		plt.plot(
-			volume['raw_positive_frequencies'], 
-			volume['raw_positive_amplitudes'], 
-			label=f"Volume {volume['htid']}"
-		)
-	plt.title(f'Frequency Spectra of All Volumes in {periodical_name}')
-	plt.xlabel('Frequency')
-	plt.ylabel('Amplitude')
-	plt.legend(fontsize='small', bbox_to_anchor=(1.05, 1), loc='upper left')  # Place legend outside plot
-	plt.tight_layout()
-	plt.savefig(f"{output_dir}/amplitude_vs_frequencies/{periodical_name}_volume_frequencies.png", dpi=300)  # Save at high resolution
-	plt.close()  # Close the plot to save memory
-
-def plot_tokens_per_page(volume_frequencies: list, output_dir: str, periodical_name: str):
-	"""
-	Plot tokens per page over pages for all volumes.
-
-	Parameters:
-	- volume_frequencies: List of volume frequency data.
-	- output_dir: Directory to save the plot.
-	- periodical_name: Name of the periodical for the title.
-	"""
-	plt.figure(figsize=(14, 8))
-	
-	for volume in volume_frequencies:
-		# Extract tokens per page and page numbers
-		tokens_per_page = volume['tokens_per_page']
-		page_numbers = volume['page_numbers']
-
-		plt.plot(page_numbers, tokens_per_page, label=f"Volume {volume['htid']}")
-	
-	plt.title(f'Tokens Per Page Across Volumes in {periodical_name}')
-	plt.xlabel('Page Number')
-	plt.ylabel('Tokens Per Page')
-	plt.legend(fontsize='small', bbox_to_anchor=(1.05, 1), loc='upper left')  # Place legend outside plot
-	plt.tight_layout()
-	plt.savefig(f"{output_dir}/tokens_per_page/{periodical_name}_tokens_per_page.png", dpi=300)  # Save at high resolution
-	plt.close()
-
-def plot_annotated_periodicals(merged_expanded_df, grouped_df, output_dir, periodical_name, dynamic_cutoff):
-	"""
-	Visualize tokens per page for annotated periodicals and calculate the lowest threshold.
-
-	Parameters:
-	- expanded_df: The expanded DataFrame with tokens per page.
-	- grouped_df: Grouped DataFrame with issue boundaries.
-	- output_dir: Directory to save the visualization.
-	- periodical_name: Name of the periodical.
-	"""
-	# Create the base Altair chart
-	selection = alt.selection_point(fields=['start_issue'], bind='legend')
-	base = alt.Chart(merged_expanded_df[['page_number', 'tokens_per_page', 'start_issue', 'htid']]).mark_line(point=True).encode(
-		x=alt.X("page_number:Q", scale=alt.Scale(zero=False)),
-		y=alt.Y('tokens_per_page:Q', scale=alt.Scale(zero=False)),
-		color='start_issue:N',
-		opacity=alt.condition(selection, alt.value(1), alt.value(0.1)),
-		tooltip=['page_number', 'tokens_per_page', 'start_issue', 'htid']
-	).add_params(selection).properties(
-		width=600,
-		height=300,
-		title=f'Tokens per Page per Issue - {periodical_name} for Volume {merged_expanded_df.htid.unique()[0]}'
-	)
-
-	# Add the dynamic cutoff line
-	cutoff_line = alt.Chart(pd.DataFrame({'y': [dynamic_cutoff]})).mark_rule(color='blue').encode(
-		y=alt.Y('y:Q', axis=alt.Axis(title=None))
-	)
-
-	# Combine the base chart and the cutoff line
-	chart = base + cutoff_line
-	# Identify pages below the dynamic cutoff
-	lowest_tokens_df = merged_expanded_df[merged_expanded_df['tokens_per_page'] <= dynamic_cutoff]
-
-	tqdm.pandas(desc="Checking if actual issue")
-	# Add 'actual_issue' column to the DataFrame
-	lowest_tokens_df['actual_issue'] = lowest_tokens_df.progress_apply(
-		check_if_actual_issue, args=(grouped_df,), axis=1
-	)
-	generate_table(lowest_tokens_df[lowest_tokens_df.actual_issue == True], "Lowest Tokens per Page")
-
-	# Sort and print missing issues
-	missing_issues = grouped_df[
-		(~grouped_df.start_issue.isin(
-			lowest_tokens_df[
-				lowest_tokens_df.actual_issue == True
-			].start_issue
-		))
-	]
-	print(f"We are missing the following issues: {missing_issues.start_issue.unique()}")
-	return missing_issues.start_issue.unique().tolist(), chart
 
 ## MAIN FUNCTIONS
 
@@ -1066,11 +937,6 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 			'smoothed_adf_pvalue': smoothed_stationarity_result.get("ADF p-value"),
 			'smoothed_kpss_pvalue': smoothed_stationarity_result.get("KPSS p-value"),
 		}
-
-		# Calculate wavelet metrics and signal metrics
-		best_wavelet_config = compare_and_rank_wavelet_metrics(
-			tokens_raw_signal, tokens_smoothed_signal, wavelet_analysis_dir, volume['htid'],wavelet_transform_settings, should_use_parallel
-		)
 		signal_types = {
 			"raw": merged_expanded_df['tokens_per_page'].values,
 			"smoothed": merged_expanded_df['smoothed_tokens_per_page'].values,
@@ -1090,6 +956,13 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 
 		# Convert to DataFrame for easier analysis
 		signal_metrics_df = pd.DataFrame(signal_metrics_results)
+		signal_metrics_df.to_csv("test.csv", index=False)
+		# Calculate wavelet metrics and signal metrics
+		best_wavelet_config = compare_and_rank_wavelet_metrics(
+			tokens_raw_signal, tokens_smoothed_signal, wavelet_analysis_dir, volume['htid'],wavelet_transform_settings, signal_metrics_df, should_use_parallel
+		)
+		
+		
 
 		# Separate raw and smoothed signals
 		raw_signals = signal_metrics_df[signal_metrics_df.signal_type == 'raw'].drop(columns=['signal_type'])

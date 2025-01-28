@@ -19,21 +19,21 @@
         {
             "metric": "wavelet_psnr",
             "original_weight": 0.25,
-            "final_weight": 2.844105603494104e-11,
+            "final_weight": 2.8441056034941046e-11,
             "normalized_weight": null,
             "ignore_metric": false,
             "removal_reason": null,
             "was_inverted": false,
             "was_shared": true,
             "was_specific": false,
-            "variance": 22.26703033501827,
+            "variance": 22.267030335018266,
             "presence": 1.0,
             "was_zscored": true
         },
         {
             "metric": "emd_value",
             "original_weight": 0.2,
-            "final_weight": 0.0030227663614061716,
+            "final_weight": 0.0030227663614061724,
             "normalized_weight": null,
             "ignore_metric": false,
             "removal_reason": null,
@@ -54,14 +54,14 @@
             "was_inverted": true,
             "was_shared": false,
             "was_specific": true,
-            "variance": 6698780264.337901,
+            "variance": 6698780264.337903,
             "presence": 0.2857142857142857,
             "was_zscored": true
         },
         {
             "metric": "wavelet_energy_entropy",
             "original_weight": 0.15,
-            "final_weight": 4.7444635712242915e-12,
+            "final_weight": 4.744463571224292e-12,
             "normalized_weight": null,
             "ignore_metric": false,
             "removal_reason": null,
@@ -76,7 +76,7 @@
         {
             "metric": "wavelet_sparsity",
             "original_weight": 0.15,
-            "final_weight": 1.8724070850372884e-15,
+            "final_weight": 1.8724070850372888e-15,
             "normalized_weight": null,
             "ignore_metric": false,
             "removal_reason": null,
@@ -90,7 +90,7 @@
         {
             "metric": "wavelet_entropy",
             "original_weight": 0.1,
-            "final_weight": 2.741233012371686e-14,
+            "final_weight": 2.7412330123716864e-14,
             "normalized_weight": null,
             "ignore_metric": false,
             "removal_reason": null,
@@ -174,7 +174,7 @@
         {
             "metric": "smoothness",
             "original_weight": 0.05,
-            "final_weight": 3.0574159055814575e-22,
+            "final_weight": 3.057415905581458e-22,
             "normalized_weight": null,
             "ignore_metric": false,
             "removal_reason": null,
@@ -188,7 +188,7 @@
         {
             "metric": "correlation",
             "original_weight": 0.05,
-            "final_weight": 2.510834048992871e-15,
+            "final_weight": 2.510834048992872e-15,
             "normalized_weight": null,
             "ignore_metric": false,
             "removal_reason": null,
@@ -209,7 +209,7 @@
             "was_inverted": false,
             "was_shared": true,
             "was_specific": false,
-            "variance": 1364191011793.0862,
+            "variance": 1364191011793.086,
             "presence": 1.0,
             "was_zscored": true
         }
