@@ -27,7 +27,7 @@ warnings.filterwarnings('ignore')
 console = Console()
 
 ## WAVELET RANKING AND COMPARISON FUNCTIONS
-def normalize_weights_dynamically(existing_metrics: list, weights: dict, results_df: pd.DataFrame, ranking_config: dict, threshold:float=0.9, shared_weight_factor:float=0.7, specific_weight_factor:float=0.3) -> tuple:
+def normalize_weights_dynamically(existing_metrics: list, weights: dict, results_df: pd.DataFrame, ranking_config: dict, threshold: float = 0.9, shared_weight_factor: float = 0.7, specific_weight_factor: float = 0.3,min_weight: float = 0.05, max_weight: float = 0.5) -> tuple:
 	"""
 	This function dynamically normalize weights for metrics based on variance, presence, and distribution across shared and specific metrics. It ensures that metrics are appropriately prioritized, reflecting their relevance and availability, while also maintaining consistency across all metrics. It first checks the variance and presence of each metric. Variance reflects the amount of variation in a metric across the dataset. Metrics with low variance may not provide meaningful distinctions between wavelet configurations, as they exhibit minimal variability. Presence indicates the proportion of data rows where the metric is non-null. Metrics with higher presence values are more widely applicable and thus hold more weight in decision-making. 
 	
@@ -35,7 +35,7 @@ def normalize_weights_dynamically(existing_metrics: list, weights: dict, results
 
 	Parameters:
 	-----------
-	metrics : list
+	existing_metrics : list
 		List of metric names to consider.
 	weights : dict
 		Dictionary of initial weights for each metric.
@@ -44,11 +44,15 @@ def normalize_weights_dynamically(existing_metrics: list, weights: dict, results
 	ranking_config : dict
 		Configuration dictionary to log weight adjustments.
 	threshold : float, optional
-		Threshold for presence to distinguish shared and specific metrics. Default is 0.9, which means metrics with a presence of 90% or higher are considered shared.
+		Threshold for presence to distinguish shared and specific metrics (default 0.9).
 	shared_weight_factor : float, optional
-		Factor to prioritize shared metrics. Default is 0.7, which means shared metrics receive 70% of the total weight allocation.
+		Factor to prioritize shared metrics (default 0.7).
 	specific_weight_factor : float, optional
-		Factor to prioritize specific metrics. Default is 0.3, which means specific metrics receive 30% of the total weight allocation.
+		Factor to prioritize specific metrics (default 0.3).
+	min_weight : float, optional
+		Minimum weight assigned to any metric to avoid zeroing out (default 0.05).
+	max_weight : float, optional
+		Maximum weight allowed for any metric (default 0.5).
 
 	Returns:
 	--------
@@ -58,89 +62,90 @@ def normalize_weights_dynamically(existing_metrics: list, weights: dict, results
 		Updated ranking configuration with normalized weights.
 	"""
 	metrics = [metric for metric in existing_metrics if metric in results_df.columns]
+
 	# Step 1: Compute Variance and Presence
 	metric_variances = results_df[metrics].var()
 	metric_presence = results_df[metrics].notna().mean()
 
-	# Log variance and presence for each metric in ranking_config
+	# Step 2: Log Variance and Presence in ranking_config
 	for metric in metrics:
 		for metric_config in ranking_config["metrics"]:
 			if metric_config["metric"] == metric:
 				metric_config["variance"] = metric_variances.get(metric, None)
 				metric_config["presence"] = metric_presence.get(metric, None)
 
-	# Step 2: Identify Shared and Specific Metrics
-	shared_metrics = [
-		metric for metric in metrics if metric_presence.get(metric, 0) >= threshold
-	]
-	specific_metrics = [metric for metric in metrics if metric not in shared_metrics]
+	# Step 3: Adjust Initial Weights Dynamically
+	dynamic_adjustments = {
+		metric: min(weights.get(metric, min_weight) * max(metric_variances[metric] * metric_presence[metric], min_weight * 10), max_weight)
+		for metric in metrics
+	}
 
-	# If all metrics are removed or ignored, fallback to even distribution or raise an error.
+	# Step 4: Normalize Dynamic Adjustments
+	total_adjustment = sum(dynamic_adjustments.values())
+	if total_adjustment == 0:
+		console.print("[bright_red]All dynamic adjustments are zero. Assigning minimum weights.[/bright_red]")
+		normalized_weights = {metric: min_weight for metric in metrics}
+	else:
+		normalized_weights = {
+			metric: min(adjustment / total_adjustment, max_weight)  # Ensure max_weight cap
+			for metric, adjustment in dynamic_adjustments.items()
+		}
+
+	# Step 5: Split Metrics Based on Shared & Specific Categories
+	shared_metrics = [m for m in metrics if metric_presence[m] >= threshold]
+	specific_metrics = [m for m in metrics if m not in shared_metrics]
+
+	# If no valid metrics exist, raise an error
 	if not shared_metrics and not specific_metrics:
 		raise ValueError("No valid metrics to normalize. Please check metric definitions.")
 
-	# Step 3: Adjust Weights Dynamically
-	dynamic_adjustments = {
-		metric: metric_variances[metric] * metric_presence[metric]
-		for metric in metrics
-		if metric in weights
-	}
-
-	# Step 4: Normalize Weights
-	normalized_weights = {}
-	for metric in shared_metrics:
-		normalized_weights[metric] = (
-			weights[metric] * dynamic_adjustments.get(metric, 1.0)
-		)
-	for metric in specific_metrics:
-		normalized_weights[metric] = (
-			weights[metric] * dynamic_adjustments.get(metric, 1.0)
-		)
-
-	# Normalize weights within shared and specific buckets
-	shared_total_weight = sum(normalized_weights[metric] for metric in shared_metrics)
-	specific_total_weight = sum(normalized_weights[metric] for metric in specific_metrics)
+	# Step 6: Apply Shared/Specific Weight Factors
+	shared_total_weight = sum(dynamic_adjustments[m] for m in shared_metrics)
+	specific_total_weight = sum(dynamic_adjustments[m] for m in specific_metrics)
 
 	for metric in shared_metrics:
-		normalized_weights[metric] = (
-			normalized_weights[metric] / shared_total_weight * shared_weight_factor
+		normalized_weights[metric] = min(
+			(dynamic_adjustments[metric] / shared_total_weight) * shared_weight_factor,
+			max_weight
 		)
+		# Log "shared" flag in ranking_config
 		for metric_config in ranking_config["metrics"]:
 			if metric_config["metric"] == metric:
 				metric_config["was_shared"] = True
 
 	for metric in specific_metrics:
-		normalized_weights[metric] = (
-			normalized_weights[metric] / specific_total_weight * specific_weight_factor
+		normalized_weights[metric] = min(
+			(dynamic_adjustments[metric] / specific_total_weight) * specific_weight_factor,
+			max_weight
 		)
+		# Log "specific" flag in ranking_config
 		for metric_config in ranking_config["metrics"]:
 			if metric_config["metric"] == metric:
 				metric_config["was_specific"] = True
 
-	# Normalize all weights to sum to 1
+	# Step 7: Ensure Weights Sum to 1
 	total_weight = sum(normalized_weights.values())
-	if total_weight > 0:
-		normalized_weights = {metric: weight / total_weight for metric, weight in normalized_weights.items()}
-	else:
+	if total_weight == 0:
 		console.print("[bright_red]All weights removed! Check your metric definitions.[/bright_red]")
-		normalized_weights = {metric: 1 / len(metrics) for metric in metrics}  # Fallback: Equal distribution
-		console.print("[yellow]Fallback: Weights evenly distributed across metrics.[/yellow]")
+		normalized_weights = {metric: min_weight for metric in metrics}  # Fallback to min_weight
+		console.print("[yellow]Fallback: Minimum weights assigned to all metrics.[/yellow]")
+	else:
+		normalized_weights = {metric: weight / total_weight for metric, weight in normalized_weights.items()}
 
-	# Step 5: Validate Weights and Stop on Critical Issues
+	# Step 8: Validate Weights and Ensure No Zeros
 	for metric in metrics:
-		weight = normalized_weights.get(metric, 0)
-		if weight == 0:
+		if normalized_weights.get(metric, 0) == 0:
 			raise ValueError(
-				f"Critical Error: Metric '{metric}' has a weight of zero in normalized weights. "
-				"This indicates an unexpected omission or a potential issue with the weighting logic."
+				f"Critical Error: Metric '{metric}' has a weight of zero. "
+				"This suggests an unexpected omission or issue in the weighting logic."
 			)
 
-	# Step 6: Update ranking_config with final weights
+	# Step 9: Log Final Weights in ranking_config
 	for metric, final_weight in normalized_weights.items():
 		for metric_config in ranking_config["metrics"]:
 			if metric_config["metric"] == metric:
 				metric_config["final_weight"] = final_weight
-
+				metric_config["normalized_weight"] = final_weight / sum(normalized_weights.values())  # Normalize to sum to 1
 
 	return normalized_weights, ranking_config
 
@@ -205,42 +210,41 @@ def align_arrays(original_array: list, reconstructed_array: list) -> float:
 	return matcher.ratio()
 
 def compare_distributions(original_array: list, reconstructed_array: list, method: str = "dtw") -> float:
-    """
-    Compare two distributions or sequences using the specified method.
+	"""
+	Compare two distributions or sequences using the specified method.
 
-    Parameters:
-    ----------
-    original_array : array-like
-        First array for comparison.
-    reconstructed_array : array-like
-        Second array for comparison.
-    method : str, optional
-        Method to use for comparison. Options:
-        - "dtw": Dynamic Time Warping for alignment-based comparison.
-        - "euclidean": Simple Euclidean distance for aligned arrays.
-        - "wasserstein": Wasserstein (Earth Mover's) distance for distributions.
+	Parameters:
+	----------
+	original_array : array-like
+		First array for comparison.
+	reconstructed_array : array-like
+		Second array for comparison.
+	method : str, optional
+		Method to use for comparison. Options:
+		- "dtw": Dynamic Time Warping for alignment-based comparison.
+		- "euclidean": Simple Euclidean distance for aligned arrays.
+		- "wasserstein": Wasserstein (Earth Mover's) distance for distributions.
 
-    Returns:
-    -------
-    float
-        Distance or similarity score between the two arrays.
-    """
-    try:
-        if method == "dtw":
-            distance, _ = fastdtw(original_array, reconstructed_array)
-            print(f"DTW distance: {distance}")
-            return distance
-        elif method == "euclidean":
-            if len(original_array) != len(reconstructed_array):
-                raise ValueError("Euclidean distance requires arrays of equal length.")
-            return np.sqrt(np.sum((original_array - reconstructed_array) ** 2))
-        elif method == "wasserstein":
-            return wasserstein_distance(original_array, reconstructed_array)
-        else:
-            raise ValueError(f"Unknown method: {method}")
-    except Exception as e:
-        console.print(f"[red]Error comparing distributions using method '{method}': {e}[/red]")
-        return np.nan
+	Returns:
+	-------
+	float
+		Distance or similarity score between the two arrays.
+	"""
+	try:
+		if method == "dtw":
+			distance, _ = fastdtw(original_array, reconstructed_array)
+			return distance
+		elif method == "euclidean":
+			if len(original_array) != len(reconstructed_array):
+				raise ValueError("Euclidean distance requires arrays of equal length.")
+			return np.sqrt(np.sum((original_array - reconstructed_array) ** 2))
+		elif method == "wasserstein":
+			return wasserstein_distance(original_array, reconstructed_array)
+		else:
+			raise ValueError(f"Unknown method: {method}")
+	except Exception as e:
+		console.print(f"[red]Error comparing distributions using method '{method}': {e}[/red]")
+		return np.nan
 
 def compare_prominences_distribution(original_array: list, reconstructed_array: list) -> tuple:
 	"""
@@ -264,36 +268,36 @@ def compare_prominences_distribution(original_array: list, reconstructed_array: 
 	return avg_diff, total_diff, wasserstein
 
 def process_array(original_value: Any, reconstructed_value: Any) -> Tuple[Union[np.ndarray, None], Union[np.ndarray, None]]:
-    """
-    Convert stringified or list-like arrays to numpy arrays.
+	"""
+	Convert stringified or list-like arrays to numpy arrays.
 
-    Parameters:
-    ----------
-    original_value : Any
-        The original value which can be a stringified array, list-like, or any other type.
-    reconstructed_value : Any
-        The reconstructed value which can be a stringified array, list-like, or any other type.
+	Parameters:
+	----------
+	original_value : Any
+		The original value which can be a stringified array, list-like, or any other type.
+	reconstructed_value : Any
+		The reconstructed value which can be a stringified array, list-like, or any other type.
 
-    Returns:
-    -------
-    Tuple[Union[np.ndarray, None], Union[np.ndarray, None]]
-        A tuple containing the converted numpy arrays. If an error occurs, returns (None, None).
-    """
-    try:
-        original_array = (
-            np.array(eval(original_value)) if isinstance(original_value, str) and original_value.startswith("[") else np.array(original_value)
-        )
-        reconstructed_array = (
-            np.array(eval(reconstructed_value)) if isinstance(reconstructed_value, str) and reconstructed_value.startswith("[") else np.array(reconstructed_value)
-        )
-        return original_array, reconstructed_array
-    except Exception as e:
-        console.print(f"[red]Error processing arrays: {e}[/red]")
-        return None, None
+	Returns:
+	-------
+	Tuple[Union[np.ndarray, None], Union[np.ndarray, None]]
+		A tuple containing the converted numpy arrays. If an error occurs, returns (None, None).
+	"""
+	try:
+		original_array = (
+			np.array(eval(original_value)) if isinstance(original_value, str) and original_value.startswith("[") else np.array(original_value)
+		)
+		reconstructed_array = (
+			np.array(eval(reconstructed_value)) if isinstance(reconstructed_value, str) and reconstructed_value.startswith("[") else np.array(reconstructed_value)
+		)
+		return original_array, reconstructed_array
+	except Exception as e:
+		console.print(f"[red]Error processing arrays: {e}[/red]")
+		return None, None
 
 def compare_original_reconstructed_metrics(
 	original_df: pd.DataFrame, reconstructed_df: pd.DataFrame
-) -> pd.DataFrame:
+) -> tuple:
 	"""
 	Compares the outputs from the calculate_signal_metrics function for the original signal versus all reconstructed wavelets. It assumes that the comparison will be within signal type (so not across raw and smoothed results). It also assumes that the original_df contains only one row of data. The function compares the metrics for each wavelet and returns a DataFrame with the comparison results. It uses a combination of sequence alignment, DTW, and other distance measures to compare the metrics. The function also normalizes the scores and computes a final reconstruction score for each wavelet.
 
@@ -307,7 +311,10 @@ def compare_original_reconstructed_metrics(
 	--------
 	ranked_comparison_df : pd.DataFrame
 		DataFrame containing the comparison results and reconstruction scores.
+	ranking_config : dict
+		Dictionary containing the ranking configuration.
 	"""
+
 	if original_df.empty or reconstructed_df.empty:
 		console.print("[yellow]One or both DataFrames are empty. Returning empty results.[/yellow]")
 		return pd.DataFrame()
@@ -315,11 +322,20 @@ def compare_original_reconstructed_metrics(
 	if len(original_df) != 1:
 		raise ValueError("original_df must contain exactly one row for comparison.")
 
+	ranking_config = {
+        "signal_type": original_df["signal_type"].iloc[0],
+        "is_reconstruction_comparison": True,
+        "metrics": []
+    }
 	comparison_rows = []  # To store row-by-row comparison results
 	metrics = set(original_df.columns).intersection(set(reconstructed_df.columns)) - {"signal_type"}
 
+	cols_to_add = ['wavelet', 'wavelet_level','wavelet_mode']
+	cols_to_add = [col for col in cols_to_add if col in reconstructed_df.columns]
+
 	for idx, reconstructed_row in tqdm(reconstructed_df.iterrows(), total=reconstructed_df.shape[0], desc="Comparing metrics"):
 		comparison = {"row_index": idx}  # Track the row index for reference
+		comparison.update({col: reconstructed_row[col] for col in cols_to_add})
 		for metric in metrics:
 			if metric in original_df.columns and metric in reconstructed_df.columns:
 				# Check if the metric is list-like or stringified array
@@ -357,23 +373,41 @@ def compare_original_reconstructed_metrics(
 	# Create DataFrame from all rows
 	comparison_df = pd.DataFrame(comparison_rows)
 	normalized_df = comparison_df.copy()
-	scaler = MinMaxScaler()
+	scaler = MinMaxScaler(feature_range=(0, 1))  # Ensure MinMaxScaler is always bounded within [0,1]
+
 	lower_is_better_metrics = [
 		col for col in comparison_df.columns if "diff" in col or col in [
 			"wasserstein", "dtw", "euclidean", "avg_diff", "total_diff"
 		]
 	]
+
 	for col in comparison_df.columns:
+
 		if col.endswith("_normalized") or col == "row_index":
 			continue  # Skip already normalized columns or non-metric columns
-		# Normalize metrics where lower values are better
+		max_value = comparison_df[col].max()
+		min_value = comparison_df[col].min()
+		console.print(f"Processing column for normalization: {col}, Initial Max: {max_value}, Initial Min: {min_value}")
+		# Normalize "lower is better" metrics by inverting their values
 		if col in lower_is_better_metrics:
-			# Invert the relationship (higher is better)
-			max_value = comparison_df[col].max()
-			normalized_df[col + "_normalized"] = 1 - (comparison_df[col] / max_value)
-		else:
-			# Direct normalization for metrics where higher is better
-			normalized_df[col + "_normalized"] = scaler.fit_transform(comparison_df[col].values.reshape(-1, 1)).flatten()
+	
+			if pd.isna(max_value) or max_value == 0:
+				normalized_df[col + "_normalized"] = 0  # Avoid division by zero
+			else:
+				normalized_df[col + "_normalized"] = 1 - (comparison_df[col] / max_value)
+
+		# Normalize "higher is better" metrics using MinMaxScaler
+		elif col not in cols_to_add + ["row_index"]:
+			try:
+				normalized_df[col + "_normalized"] = scaler.fit_transform(
+					comparison_df[col].values.reshape(-1, 1)
+				).flatten()
+			except ValueError as e:
+				console.print(f"[red]Skipping normalization for {col}: {e}[/red]")
+				normalized_df[col + "_normalized"] = np.nan  # Assign NaN for debugging
+		norm_max_value = normalized_df[col + "_normalized"].max()
+		norm_min_value = normalized_df[col + "_normalized"].min()
+		console.print(f"Normalized column: {col}, Normalized Max: {norm_max_value}, Normalized Min: {norm_min_value}")
 
 	# Define weights for all metric types
 	metric_weights = {
@@ -388,7 +422,7 @@ def compare_original_reconstructed_metrics(
 	}
 
 	# Compute reconstruction scores
-	total_scores = []
+	total_scores_weighted = []
 	for _, row in normalized_df.iterrows():
 		weighted_scores = []
 		for metric_type, weight in metric_weights.items():
@@ -397,17 +431,46 @@ def compare_original_reconstructed_metrics(
 				metric_score = row[metric_columns].mean()  # Average across related normalized metrics
 				weighted_scores.append(weight * metric_score)
 
-		total_scores.append(sum(weighted_scores))
+		total_scores_weighted.append(sum(weighted_scores))
 
-	normalized_df["reconstruction_score"] = total_scores
-	correlation_matrix = normalized_df.corr()
-	reconstruction_corr = correlation_matrix["reconstruction_score"].sort_values(ascending=False)
+	normalized_df["reconstruction_score_weighted"] = total_scores_weighted
 
-	console.print(f"Reconstruction Score Correlation Analysis:\n{reconstruction_corr}")
+	# Compute **simple summation reconstruction score**
+	normalized_columns = [col for col in normalized_df.columns if col.endswith("_normalized")]
+	normalized_df["reconstruction_score_sum"] = normalized_df[normalized_columns].sum(axis=1)
 
-	# Sort by total score in descending order
-	ranked_comparison_df = normalized_df.sort_values(by="reconstruction_score", ascending=False).reset_index(drop=True)
-	return ranked_comparison_df
+	# Correlation Analysis
+	correlation_matrix = normalized_df[normalized_columns + ["reconstruction_score_weighted", "reconstruction_score_sum"]].corr()
+	reconstruction_corr = correlation_matrix["reconstruction_score_weighted"].sort_values(ascending=False)
+	console.print(f"Weighted Reconstruction Score Correlation:\n{reconstruction_corr}")
+
+	reconstruction_corr_sum = correlation_matrix["reconstruction_score_sum"].sort_values(ascending=False)
+	console.print(f"Summed Reconstruction Score Correlation:\n{reconstruction_corr_sum}")
+
+	# Sort results
+	ranked_comparison_df = normalized_df.sort_values(by="reconstruction_score_weighted", ascending=False).reset_index(drop=True)
+	ranked_comparison_df["rank_weighted"] = ranked_comparison_df.index + 1  # Rank by weighted method
+	ranked_comparison_df = ranked_comparison_df.sort_values(by="reconstruction_score_sum", ascending=False).reset_index(drop=True)
+	ranked_comparison_df["rank_sum"] = ranked_comparison_df.index + 1  # Rank by summed method
+
+	for metric in metrics:
+		ranking_config["metrics"].append({
+			"metric": metric,
+			"weight": next((metric_weights[mt] for mt in metric_weights if metric.endswith(mt)), None),
+			"was_normalized": metric + "_normalized" in normalized_df.columns,
+			"was_inverted": metric in lower_is_better_metrics
+		})
+
+	ranking_config["reconstruction_score_weighted_max"] = normalized_df["reconstruction_score_weighted"].max()
+	ranking_config["reconstruction_score_weighted_min"] = normalized_df["reconstruction_score_weighted"].min()
+	ranking_config["reconstruction_score_weighted_mean"] = normalized_df["reconstruction_score_weighted"].mean()
+	ranking_config["reconstruction_score_weighted_std"] = normalized_df["reconstruction_score_weighted"].std()
+	ranking_config["reconstruction_score_sum_max"] = normalized_df["reconstruction_score_sum"].max()
+	ranking_config["reconstruction_score_sum_min"] = normalized_df["reconstruction_score_sum"].min()
+	ranking_config["reconstruction_score_sum_mean"] = normalized_df["reconstruction_score_sum"].mean()
+	ranking_config["reconstruction_score_sum_std"] = normalized_df["reconstruction_score_sum"].std()
+
+	return ranked_comparison_df, ranking_config
 
 def determine_best_wavelet_representation(
 	results_df: pd.DataFrame, signal_type: str, original_signal_metrics_df: pd.DataFrame, weights: dict = None, is_combined: bool = False, epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05, percentage_of_results: float = 0.1, ignore_low_variance: bool = False
@@ -449,23 +512,31 @@ def determine_best_wavelet_representation(
 	updated_ranking_config : dict
 		Dictionary containing the ranking configuration for the analysis.
 	"""
+	processed_results = []
+	reconstruction_ranking_configs = []
 	for signal_type in original_signal_metrics_df["signal_type"].unique():
 		console.print(f"Analyzing reconstruction accuracy for {signal_type} signal...")
-		results_df[results_df.signal_type == signal_type].to_csv(f"test_{signal_type}_results.csv", index=False)
-		original_signal_metrics_df[original_signal_metrics_df.signal_type == signal_type].to_csv(f"test_{signal_type}_original_signal_metrics.csv", index=False)
-		ranked_reconstruction_df = compare_original_reconstructed_metrics(
-			original_signal_metrics_df[original_signal_metrics_df.signal_type == signal_type],
-			results_df[results_df.signal_type == signal_type]
+		subset_results_df = results_df[results_df.signal_type == signal_type]
+		subset_original_signal_metrics_df = original_signal_metrics_df[original_signal_metrics_df.signal_type == signal_type]
+		ranked_reconstruction_df, reconstruction_config = compare_original_reconstructed_metrics(
+			subset_original_signal_metrics_df,
+			subset_results_df
 		)
-		ranked_reconstruction_df.to_csv(f"test_results_{signal_type}.csv", index=False)
-
+		reconstruction_ranking_configs.append(reconstruction_config)
+		ranked_reconstruction_df.to_csv(f"ranked_reconstruction_df_{signal_type}.csv", index=False)
 		# Merge reconstruction_score into results_df
-		results_df = results_df.merge(
-			ranked_reconstruction_df[["row_index", "reconstruction_score"]],
+		subset_results_df = subset_results_df.merge(
+			ranked_reconstruction_df[["row_index", "reconstruction_score_weighted", "reconstruction_score_sum"]],
 			left_index=True,
 			right_on="row_index",
 			how="left"
 		)
+		processed_results.append(subset_results_df)
+	
+	results_df = pd.concat(processed_results, ignore_index=True)
+	results_df = results_df.drop(columns=["row_index"], errors="ignore")
+	results_df = results_df.reset_index(drop=True)
+	results_df.to_csv("results_df.csv", index=False)
 
 	# Default weights if not provided
 	if weights is None:
@@ -490,7 +561,8 @@ def determine_best_wavelet_representation(
 	ranking_config = {
 		"signal_type": signal_type,
 		"is_combined": is_combined,
-		"metrics": []
+		"metrics": [],
+		"reconstruction_configs": reconstruction_ranking_configs
 	}
 	# Populate ranking_config dynamically
 	for metric, original_weight in weights.items():
@@ -648,6 +720,25 @@ def determine_best_wavelet_representation(
 		axis=1
 	)
 
+	# Compute summed normalized score
+	normalized_df[f"{prefix}wavelet_summed_norm_score"] = normalized_df.apply(
+		lambda row: sum(
+			row[f"{prefix}{metric}_norm"]
+			for metric in updated_metrics
+			if pd.notna(row[f"{prefix}{metric}_norm"])
+		),
+		axis=1
+	)
+
+	# Normalize summed score so that it has a comparable range
+	max_summed_score = normalized_df[f"{prefix}wavelet_summed_norm_score"].max()
+	if max_summed_score > 0:
+		normalized_df[f"{prefix}wavelet_summed_norm_score"] /= max_summed_score
+	else:
+		console.print("[yellow]Max summed normalized score is zero! Assigning equal scores.[/yellow]")
+		normalized_df[f"{prefix}wavelet_summed_norm_score"] = 1 / len(updated_metrics)  # Assign equal importance
+
+
 	# Calculate normalized diff
 	normalized_df[f"{prefix}normalized_diff"] = (
 		(normalized_df[f"{prefix}wavelet_norm_weighted_score"] - normalized_df[f"{prefix}wavelet_zscore_weighted_score"]).abs()
@@ -660,11 +751,17 @@ def determine_best_wavelet_representation(
 		- penalty_weight * normalized_df[f"{prefix}normalized_diff"]
 	)
 
-	# Rank results
+	# Rank results by final_score (Weighted method)
 	ranked_results = normalized_df.sort_values(
 		by=f"{prefix}final_score", ascending=False
 	).reset_index(drop=True)
 	ranked_results[f"{prefix}wavelet_rank"] = ranked_results.index + 1
+
+	# Rank results by summed normalized score (Summing method)
+	ranked_results = ranked_results.sort_values(
+		by=f"{prefix}wavelet_summed_norm_score", ascending=False
+	).reset_index(drop=True)
+	ranked_results[f"{prefix}wavelet_summed_rank"] = ranked_results.index + 1
 
 	ranked_results.to_csv(f"test_{signal_type}_ranked_results.csv", index=False)
 
@@ -680,7 +777,9 @@ def determine_best_wavelet_representation(
 		lambda group: group.loc[group[f"{prefix}final_score"].idxmax()]
 	).reset_index(drop=True)
 
-	final_ranked_results = pd.concat([top_ranked_results, subset_ranked_results], ignore_index=True).drop_duplicates()
+	drop_cols = ['signal_type', 'wavelet_type', 'wavelet', 'wavelet_mode', 'wavelet_level']
+	drop_cols = [drop_col for drop_col in drop_cols if (drop_col in subset_ranked_results.columns) and (drop_col in top_ranked_results.columns)]
+	final_ranked_results = pd.concat([top_ranked_results, subset_ranked_results], ignore_index=True).drop_duplicates(subset=drop_cols, keep='first')
 	final_ranked_results = final_ranked_results.sort_values(
 		by=f"{prefix}final_score", ascending=False
 	).reset_index(drop=True)
