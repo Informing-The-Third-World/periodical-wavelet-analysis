@@ -12,15 +12,20 @@ import altair as alt
 from tqdm import tqdm
 from rich.console import Console
 import pywt
-from sklearn.preprocessing import RobustScaler
+from sklearn.preprocessing import RobustScaler, MinMaxScaler
 from sklearn.metrics import mean_squared_error
 from statsmodels.tsa.stattools import adfuller, kpss
 from scipy.signal import detrend
 from scipy.spatial.distance import cosine
+from scipy.stats import wasserstein_distance
+from difflib import SequenceMatcher
+from fastdtw import fastdtw
+from minineedle import needle, core
 
 # Local application imports
 sys.path.append("../..")
 from scripts.utils import read_csv_file, get_data_directory_path, save_chart, generate_table, process_tokens
+from scripts.wavelet_scripts.generate_wavelet_stationarity import preprocess_signal_for_stationarity, check_wavelet_stationarity
 from scripts.wavelet_scripts.generate_wavelet_signal_processing import evaluate_dwt_performance, evaluate_dwt_performance_parallel, evaluate_cwt_performance, evaluate_cwt_performance_parallel, evaluate_swt_performance, evaluate_swt_performance_parallel, calculate_signal_metrics
 from scripts.wavelet_scripts.generate_wavelet_plots import plot_volume_frequencies_matplotlib, plot_tokens_per_page, plot_annotated_periodicals
 
@@ -29,184 +34,6 @@ warnings.filterwarnings('ignore')
 
 # Initialize console
 console = Console()
-
-
-## WAVELET STATIONARITY FUNCTIONS
-def apply_differencing(signal: np.ndarray, order: int = 1) -> np.ndarray:
-	"""
-	Apply differencing to a signal to remove trends and achieve stationarity. If the order is less than 1, the function returns None with a warning. Differencing is only used when a signal is non-stationary.
-
-	Parameters:
-	-----------
-	signal : np.ndarray
-		The input signal.
-	order : int, optional
-		The order of differencing. Default is 1.
-
-	Returns:
-	--------
-	np.ndarray or None:
-		The differenced signal if successful; None if the order is invalid.
-	"""
-	if order < 1:
-		console.print("[red]Order of differencing must be at least 1. Returning None.[/red]")
-		return None
-
-	try:
-		differenced_signal = np.diff(signal, n=order)
-		return differenced_signal
-	except Exception as e:
-		console.print(f"[red]Error applying differencing: {e}. Returning None.[/red]")
-		return None
-
-def apply_detrending(signal: np.ndarray, method: str = "linear") -> np.ndarray:
-	"""
-	Remove trends from a signal using linear or polynomial detrending. If the method is invalid, the function returns None with a warning. Detrending is only used when a signal is non-stationary.
-
-	Parameters:
-	-----------
-	signal : np.ndarray
-		The input signal.
-	method : str, optional
-		The detrending method. Options are "linear" (default) or "constant".
-		- "linear": Removes a linear trend.
-		- "constant": Removes the mean of the signal.
-
-	Returns:
-	--------
-	np.ndarray or None:
-		The detrended signal if successful; None if the method is invalid.
-	"""
-	if method not in ["linear", "constant"]:
-		console.print("[red]Invalid method. Use 'linear' or 'constant'. Returning None.[/red]")
-		return None
-
-	try:
-		return detrend(signal, type=method)
-	except Exception as e:
-		console.print(f"[red]Error applying detrending: {e}. Returning None.[/red]")
-		return None
-
-def check_wavelet_stationarity(signal: np.ndarray, signal_type: str, max_lag: int = 10, significance_level: float = 0.05) -> dict:
-	"""
-	Check the stationarity of a signal using the Augmented Dickey-Fuller and Kwiatkowski-Phillips-Schmidt-Shin tests.
-
-	Combined Result Interpretation:
-	- ADF p-value ≤ significance and KPSS p-value > significance: Signal is stationary.
-	- ADF p-value > significance and KPSS p-value ≤ significance: Signal is non-stationary.
-	- Both tests significant (p-value ≤ significance): Potential trend-stationary; requires further inspection.
-	- Both tests non-significant (p-value > significance): Likely stationary but may require confirmation.
-
-	Parameters:
-	-----------
-	signal : np.ndarray
-		The signal to check for stationarity.
-	signal_type : str
-		The type of signal being analyzed (e.g., raw or smoothed).
-	max_lag : int, optional
-		The maximum lag to consider in the ADF test. Default is 10.
-	significance_level : float, optional
-		The significance level for the tests. Default is 0.05.
-
-	Returns:
-	--------
-	dict:
-		- is_stationary: bool, whether the signal is stationary.
-		- ADF p-value: float, p-value from the ADF test.
-		- KPSS p-value: float, p-value from the KPSS test.
-		- ADF statistic: float, test statistic from the ADF test.
-		- KPSS statistic: float, test statistic from the KPSS test.
-	"""
-	# Augmented Dickey-Fuller Test
-	adf_stat, adf_pvalue, _, _, _, _ = adfuller(signal, maxlag=max_lag)
-	console.print(f"[violet]ADF Test for {signal_type}: Statistic={adf_stat:.4f}, p-value={adf_pvalue:.4f}[/violet]")
-
-	# Kwiatkowski-Phillips-Schmidt-Shin Test
-	try:
-		kpss_stat, kpss_pvalue, _, _ = kpss(signal, regression='c')
-		console.print(f"[violet]KPSS Test for {signal_type}: Statistic={kpss_stat:.4f}, p-value={kpss_pvalue:.4f}[/violet]")
-	except ValueError as e:
-		console.print(f"[bright_red]Error in KPSS test: {e}[/bright_red]")
-		return {
-			"is_stationary": False,
-			"ADF p-value": adf_pvalue,
-			"KPSS p-value": None,
-			"ADF statistic": adf_stat,
-			"KPSS statistic": None
-		}
-
-	# Combined Result Interpretation
-	if adf_pvalue <= significance_level and kpss_pvalue > significance_level:
-		is_stationary = True
-		console.print("[green]Signal is stationary.[/green]")
-	elif adf_pvalue > significance_level and kpss_pvalue <= significance_level:
-		is_stationary = False
-		console.print("[red]Signal is non-stationary.[/red]")
-	elif adf_pvalue <= significance_level and kpss_pvalue <= significance_level:
-		console.print("[yellow]Conflicting results: Further inspection needed.[/yellow]")
-		is_stationary = False
-	else:
-		is_stationary = True
-		console.print("[green]Likely stationary but requires confirmation.[/green]")
-
-	return {
-		"is_stationary": is_stationary,
-		"ADF p-value": adf_pvalue,
-		"KPSS p-value": kpss_pvalue,
-		"ADF statistic": adf_stat,
-		"KPSS statistic": kpss_stat
-	}
-
-def preprocess_signal_for_stationarity(signal: np.ndarray, signal_type: str, max_lag: int = 10, significance_level: float = 0.05) -> tuple:
-	"""
-	Preprocess a signal to achieve stationarity by applying detrending or differencing if necessary. The function first checks the stationarity of the input signal using the Augmented Dickey-Fuller and Kwiatkowski-Phillips-Schmidt-Shin tests. If the signal is non-stationary, it applies detrending and differencing sequentially until the signal becomes stationary.
-
-	A signal of token frequency might be non-stationary if it exhibits trends or seasonality, which can affect the accuracy of wavelet analysis. Preprocessing the signal for stationarity is essential for reliable wavelet decomposition and feature extraction.
-
-	Parameters:
-	-----------
-	signal : np.ndarray
-		The input signal.
-	signal_type : str
-		The type of signal being analyzed (e.g., "raw", "smoothed").
-	max_lag : int, optional
-		Maximum lag for the ADF test.
-	significance_level : float, optional
-		Significance level for stationarity tests.
-
-	Returns:
-	--------
-	tuple:
-		- processed_signal (np.ndarray): The processed signal (stationary if preprocessing is successful).
-		- stationarity_results (dict): Results of the stationarity tests.
-	"""
-	stationarity_result = check_wavelet_stationarity(signal, signal_type, max_lag, significance_level)
-	processed_signal = signal  # Start with the original signal
-
-	if stationarity_result["is_stationary"]:
-		console.print("[bright_green]Signal is already stationary. No preprocessing needed.[/bright_green]")
-		return processed_signal, stationarity_result
-	
-	console.print("[yellow]Signal is not stationary. Applying detrending...[/yellow]")
-	detrended_signal = apply_detrending(signal, method="linear")
-	
-	# Re-check stationarity after detrending
-	stationarity_result = check_wavelet_stationarity(detrended_signal, signal_type, max_lag, significance_level)
-	if stationarity_result["is_stationary"]:
-		console.print("[bright_green]Signal is stationary after detrending.[/bright_green]")
-		return detrended_signal, stationarity_result
-	
-	console.print("[yellow]Signal is still not stationary. Applying first-order differencing...[/yellow]")
-	differenced_signal = apply_differencing(detrended_signal, order=1)
-	
-	# Final stationarity check
-	stationarity_result = check_wavelet_stationarity(differenced_signal, signal_type, max_lag, significance_level)
-	if stationarity_result["is_stationary"]:
-		console.print("[bright_green]Signal is stationary after differencing.[/bright_green]")
-		return differenced_signal, stationarity_result
-	else:
-		console.print("[red]Signal remains non-stationary despite preprocessing.[/red]")
-		return differenced_signal, stationarity_result
 
 ## WAVELET RANKING AND COMPARISON FUNCTIONS
 def filter_wavelets(wavelets: list, exclude_complex: bool = True) -> list:
@@ -349,101 +176,271 @@ def normalize_weights_dynamically(existing_metrics: list, weights: dict, results
 
 	return normalized_weights, ranking_config
 
-def compare_original_reconstructed_metrics(original_df: pd.DataFrame, reconstructed_df: pd.DataFrame, cosine_weight: float = 0.7, diff_weight: float = 0.3) -> pd.DataFrame:
+def run_global_sequence_alignment(target_sequence: list, window: list, placeholder: int = -1) -> int:
 	"""
-	Compare original and reconstructed signal metrics, compute total scores, and rank results.
+	Applies global sequence alignment on the implied zero values within a window using minineedle, with placeholders.
+	
+	Parameters
+	----------
+	target_sequence : list
+		The target sequence to be used in the alignment.
+	window : list
+		The window containing the observed sequence.
+	placeholder : int
+		The placeholder value to be used in the alignment.
+		
+	Returns
+	-------
+	alignment_score : int
+		The alignment score. If the alignment fails, returns 0. A higher score indicates a better alignment.
+	"""
+	# Extract the observed sequence from the window
+	observed_sequence = [float(p) if pd.notna(p) else placeholder for p in window]
+	
+	# Check for valid entries in the observed sequence
+	if all(val == placeholder for val in observed_sequence):
+		return 0
+
+	# Create Needleman-Wunsch global alignment instance
+	alignment = needle.NeedlemanWunsch(observed_sequence, target_sequence)
+	alignment.change_matrix(core.ScoreMatrix(match=4, miss=-0.5, gap=-1))
+
+	try:
+		# Run the alignment
+		alignment.align()
+		alignment_score = alignment.get_score()
+		return alignment_score
+
+	except ZeroDivisionError:
+		return 0
+
+def align_arrays(original_array: list, reconstructed_array: list) -> float:
+	"""
+	Align the original and reconstructed arrays using sequence alignment. Uses the SequenceMatcher from difflib to compare the two arrays and return a similarity ratio. A higher ratio indicates a better alignment.
+
+	Parameters
+	----------
+	original_array : list
+		The original array to be aligned.
+	reconstructed_array : list
+		The reconstructed array to be aligned.
+
+	Returns
+	-------
+	float
+		The alignment score. A higher score indicates a better alignment.
+	"""
+	# Convert to strings for alignment
+	original_array_str = " ".join(map(str, original_array))
+	reconstructed_array_str = " ".join(map(str, reconstructed_array))
+	matcher = SequenceMatcher(None, original_array_str, reconstructed_array_str)
+	return matcher.ratio()
+
+def compare_prominences_distribution(original_array: list, reconstructed_array: list) -> tuple:
+	"""
+	Compares prominence distributions using average, total, and Wasserstein distance. Lower values indicate better alignment for average and total differences, and Wasserstein distance.
 
 	Parameters:
 	----------
-	original_df : pd.DataFrame
-		DataFrame containing the original signal metrics.
-	reconstructed_df : pd.DataFrame
-		DataFrame containing the reconstructed signal metrics.
-	cosine_weight : float
-		Weight for cosine similarity in the total score (default: 0.7).
-	diff_weight : float
-		Weight for diff similarity in the total score (default: 0.3).
+	original_array : list
+		The original array.
+	reconstructed_array : list
+		The reconstructed array.
 
 	Returns:
-	--------
-	ranked_comparison_df : pd.DataFrame
-		DataFrame sorted by total similarity score, with individual scores included.
+	-------
+	tuple
+		A tuple containing the average difference, total difference, and Wasserstein distance.
 	"""
-	# Handle edge case for empty DataFrames
+	avg_diff = np.abs(np.mean(original_array) - np.mean(reconstructed_array))
+	total_diff = np.abs(np.sum(original_array) - np.sum(reconstructed_array))
+	wasserstein = compare_distributions(original_array, reconstructed_array, method="wasserstein")
+	return avg_diff, total_diff, wasserstein
+
+def compare_distributions(original_array: list, reconstructed_array: list, method: str = "dtw") -> float:
+    """
+    Compare two distributions or sequences using the specified method.
+
+    Parameters:
+    ----------
+    original_array : array-like
+        First array for comparison.
+    reconstructed_array : array-like
+        Second array for comparison.
+    method : str, optional
+        Method to use for comparison. Options:
+        - "dtw": Dynamic Time Warping for alignment-based comparison.
+        - "euclidean": Simple Euclidean distance for aligned arrays.
+        - "wasserstein": Wasserstein (Earth Mover's) distance for distributions.
+
+    Returns:
+    -------
+    float
+        Distance or similarity score between the two arrays.
+    """
+    try:
+        if method == "dtw":
+            distance, _ = fastdtw(original_array, reconstructed_array)
+            print(f"DTW distance: {distance}")
+            return distance
+        elif method == "euclidean":
+            if len(original_array) != len(reconstructed_array):
+                raise ValueError("Euclidean distance requires arrays of equal length.")
+            return np.sqrt(np.sum((original_array - reconstructed_array) ** 2))
+        elif method == "wasserstein":
+            return wasserstein_distance(original_array, reconstructed_array)
+        else:
+            raise ValueError(f"Unknown method: {method}")
+    except Exception as e:
+        console.print(f"[red]Error comparing distributions using method '{method}': {e}[/red]")
+        return np.nan
+def process_array(original_value, reconstructed_value):
+	"""
+	Convert stringified or list-like arrays to numpy arrays.
+	"""
+	try:
+		original_array = (
+			np.array(eval(original_value)) if isinstance(original_value, str) and original_value.startswith("[") else np.array(original_value)
+		)
+		reconstructed_array = (
+			np.array(eval(reconstructed_value)) if isinstance(reconstructed_value, str) and reconstructed_value.startswith("[") else np.array(reconstructed_value)
+		)
+		return original_array, reconstructed_array
+	except Exception as e:
+		console.print(f"[red]Error processing arrays: {e}[/red]")
+		return None, None
+
+def compare_original_reconstructed_metrics(
+	original_df: pd.DataFrame, reconstructed_df: pd.DataFrame, cosine_weight: float = 0.7, diff_weight: float = 0.3
+) -> pd.DataFrame:
+	"""
+	Compare original and reconstructed signal metrics row-by-row, compute total scores, and rank results.
+	"""
 	if original_df.empty or reconstructed_df.empty:
 		console.print("[yellow]One or both DataFrames are empty. Returning empty results.[/yellow]")
 		return pd.DataFrame()
 
-	comparison = {}
-	# Generate the metrics as the intersection of the columns in both DataFrames
-	metrics = set(original_df.columns).intersection(set(reconstructed_df.columns))
-	metrics = [metric for metric in metrics if metric not in ["signal_type"]]
-	for metric in metrics:
-		if metric in original_df.columns and metric in reconstructed_df.columns:
-			# Handle array-based columns
-			if isinstance(original_df[metric].iloc[0], str) and original_df[metric].iloc[0].startswith("["):
-				try:
-					# Convert stringified arrays to numpy arrays
-					original_arrays = original_df[metric].apply(eval).apply(np.array)
-					reconstructed_arrays = reconstructed_df[metric].apply(eval).apply(np.array)
+	if len(original_df) != 1:
+		raise ValueError("original_df must contain exactly one row for comparison.")
+
+	comparison_rows = []  # To store row-by-row comparison results
+	metrics = set(original_df.columns).intersection(set(reconstructed_df.columns)) - {"signal_type"}
+
+	for idx, reconstructed_row in reconstructed_df.iterrows():
+		comparison = {"row_index": idx}  # Track the row index for reference
+
+		for metric in metrics:
+			if metric in original_df.columns and metric in reconstructed_df.columns:
+				console.print(f"Comparing metric: {metric}")
+
+				if isinstance(original_df[metric].iloc[0], (list, np.ndarray)) or (
+					isinstance(original_df[metric].iloc[0], str) and original_df[metric].iloc[0].startswith("[")
+				):
+					original_array, reconstructed_array = process_array(original_df[metric].iloc[0], reconstructed_row[metric])
+
+					if original_array is None or reconstructed_array is None:
+						continue
 					
-					# Compute similarity measures only if array shapes match
-					cosine_sim = []
-					mse = []
-					for orig, recon in zip(original_arrays, reconstructed_arrays):
-						if len(orig) == len(recon):
-							cosine_sim.append(1 - cosine(orig, recon))
-							mse.append(mean_squared_error(orig, recon))
-						else:
-							cosine_sim.append(np.nan)
-							mse.append(np.nan)
+					if metric in {"relative_peaks", "relative_left_bases", "relative_right_bases"}:
+						comparison[f"{metric}_matcher_alignment_score"] = align_arrays(original_array, reconstructed_array)
+						comparison[f"{metric}_global_alignment_score"] = run_global_sequence_alignment(original_array, reconstructed_array)
+					elif metric in {"positive_frequencies", "positive_amplitudes"}:
+						comparison[f"{metric}_dtw"] = compare_distributions(original_array, reconstructed_array, method="dtw")
+						if len(original_array) == len(reconstructed_array):
+							comparison[f"{metric}_euclidean"] = compare_distributions(original_array, reconstructed_array, method="euclidean")
+						comparison[f"{metric}_wasserstein"] = compare_distributions(original_array, reconstructed_array, method="wasserstein")
 
-					# Store average similarity scores
-					comparison[f"{metric}_mse"] = np.nanmean(mse)
-					comparison[f"{metric}_cosine_similarity"] = np.nanmean(cosine_sim)
-				except Exception as e:
-					console.print(f"[red]Error processing arrays for metric '{metric}': {e}[/red]")
-					comparison[f"{metric}_mse"] = np.nan
-					comparison[f"{metric}_cosine_similarity"] = np.nan
-			else:
-				# Compute absolute difference for scalar values
-				comparison[f"{metric}_diff"] = (original_df[metric] - reconstructed_df[metric]).abs().mean()
+					elif metric == "relative_prominences":
+						avg_diff, total_diff, wasserstein = compare_prominences_distribution(original_array, reconstructed_array)
+						comparison[f"{metric}_avg_diff"] = avg_diff
+						comparison[f"{metric}_total_diff"] = total_diff
+						comparison[f"{metric}_wasserstein"] = wasserstein
+				else:
+					try:
+						comparison[f"{metric}_diff"] = abs(float(original_df[metric].iloc[0]) - float(reconstructed_row[metric]))
+					except Exception as e:
+						console.print(f"[red]Error computing difference for metric '{metric}': {e}[/red]")
+						comparison[f"{metric}_diff"] = np.nan
+
+		comparison_rows.append(comparison)
+
+	# Create DataFrame from all rows
+	comparison_df = pd.DataFrame(comparison_rows)
+	normalized_df = comparison_df.copy()
+	scaler = MinMaxScaler()
+	lower_is_better_metrics = [
+		col for col in comparison_df.columns if "diff" in col or col in [
+			"wasserstein", "dtw", "euclidean", "avg_diff", "total_diff"
+		]
+	]
+	for col in comparison_df.columns:
+		if col.endswith("_normalized") or col == "row_index":
+			continue  # Skip already normalized columns or non-metric columns
+
+		# Normalize metrics where lower values are better
+		if col in lower_is_better_metrics:
+			# Invert the relationship (higher is better)
+			max_value = comparison_df[col].max()
+			normalized_df[col + "_normalized"] = 1 - (comparison_df[col] / max_value)
 		else:
-			# Handle missing metrics explicitly
-			console.print(f"[yellow]Metric '{metric}' is missing in one of the DataFrames.[/yellow]")
-			comparison[f"{metric}_mse"] = np.nan
-			comparison[f"{metric}_cosine_similarity"] = np.nan
-			comparison[f"{metric}_diff"] = np.nan
+			# Direct normalization for metrics where higher is better
+			normalized_df[col + "_normalized"] = scaler.fit_transform(comparison_df[col].values.reshape(-1, 1)).flatten()
 
-	# Convert to DataFrame
-	comparison_df = pd.DataFrame([comparison])
+	# Define weights for all metric types
+	metric_weights = {
+		"diff": 0.3,              # Medium weight for differences
+		"matcher_alignment_score": 0.6,  # High weight for sequence alignment
+		"global_alignment_score": 0.6,  # High weight for global alignment
+		"dtw": 0.5,               # Medium weight for DTW distances
+		"euclidean": 0.4,         # Medium-low weight for Euclidean distances
+		"wasserstein": 0.4,       # Medium-low weight for Wasserstein distances
+		"avg_diff": 0.3,          # Low weight for average difference
+		"total_diff": 0.2,        # Low weight for total difference
+	}
 
-	# Compute total score for ranking
+	# Compute reconstruction scores
 	total_scores = []
-	for _, row in comparison_df.iterrows():
-		# Average cosine similarity across all metrics
-		cosine_score = np.nanmean([
-			row[col] for col in comparison_df.columns if col.endswith("cosine_similarity")
-		])
-		# Average absolute differences across all metrics
-		diff_score = np.nanmean([
-			row[col] for col in comparison_df.columns if col.endswith("diff")
-		])
+	for _, row in normalized_df.iterrows():
+		weighted_scores = []
+		for metric_type, weight in metric_weights.items():
+			metric_columns = [col for col in normalized_df.columns if col.endswith(metric_type + "_normalized")]
+			if metric_columns:
+				metric_score = row[metric_columns].mean()  # Average across related normalized metrics
+				weighted_scores.append(weight * metric_score)
 
-		# Normalize diff (invert for scoring: lower diff is better)
-		normalized_diff_score = 1 / (1 + diff_score) if diff_score is not None else 0
+		total_scores.append(sum(weighted_scores))
 
-		# Compute weighted total score
-		total_score = (cosine_weight * cosine_score if cosine_score is not None else 0) + \
-					  (diff_weight * normalized_diff_score if normalized_diff_score is not None else 0)
-		total_scores.append(total_score)
+	normalized_df["reconstruction_score"] = total_scores
+	# total_scores = []
+	# for _, row in comparison_df.iterrows():
+	# 	# Aggregate scores for each metric type
+	# 	weighted_scores = []
+	# 	for metric_type, weight in metric_weights.items():
+	# 		# Find relevant columns for the metric type
+	# 		metric_columns = [col for col in comparison_df.columns if col.endswith(metric_type)]
+	# 		if metric_columns:
+	# 			# Average score for the metric type across all relevant columns
+	# 			metric_score = np.nanmean([row[col] for col in metric_columns])
+	# 			# Normalize distance-based scores (e.g., DTW) to align with similarity-based scores
+	# 			if metric_type in {"dtw", "euclidean", "wasserstein", "total_diff", "avg_diff"} and metric_score is not None:
+	# 				metric_score = 1 / (1 + metric_score)  # Inverse of distance for scoring
+	# 			if metric_score is not None:
+	# 				weighted_scores.append(weight * metric_score)
 
-	# Add total scores to the DataFrame
-	comparison_df["reconstruction_score"] = total_scores
+	# 	# Sum up weighted scores to compute the total score
+	# 	total_score = sum(weighted_scores)
+	# 	total_scores.append(total_score)
+
+	# # Add total scores to the DataFrame
+	# comparison_df["reconstruction_score"] = total_scores
+	# Correlation Analysis
+	correlation_matrix = normalized_df.corr()
+	reconstruction_corr = correlation_matrix["reconstruction_score"].sort_values(ascending=False)
+
+	console.print(f"Reconstruction Score Correlation Analysis:\n{reconstruction_corr}")
 
 	# Sort by total score in descending order
-	ranked_comparison_df = comparison_df.sort_values(by="reconstruction_score", ascending=False).reset_index(drop=True)
-
+	ranked_comparison_df = normalized_df.sort_values(by="reconstruction_score", ascending=False).reset_index(drop=True)
 	return ranked_comparison_df
 
 def determine_best_wavelet_representation(
@@ -486,7 +483,24 @@ def determine_best_wavelet_representation(
 	updated_ranking_config : dict
 		Dictionary containing the ranking configuration for the analysis.
 	"""
-	console.print(f"Results for {signal_type} Wavelet Analysis")
+	for signal_type in original_signal_metrics_df["signal_type"].unique():
+		console.print(f"Analyzing reconstruction accuracy for {signal_type} signal...")
+		results_df[results_df.signal_type == signal_type].to_csv(f"test_{signal_type}_results.csv", index=False)
+		original_signal_metrics_df[original_signal_metrics_df.signal_type == signal_type].to_csv(f"test_{signal_type}_original_signal_metrics.csv", index=False)
+		ranked_reconstruction_df = compare_original_reconstructed_metrics(
+			original_signal_metrics_df[original_signal_metrics_df.signal_type == signal_type],
+			results_df[results_df.signal_type == signal_type]
+		)
+		ranked_reconstruction_df.to_csv(f"test_results_{signal_type}.csv", index=False)
+
+		# Merge reconstruction_score into results_df
+		results_df = results_df.merge(
+			ranked_reconstruction_df[["row_index", "reconstruction_score"]],
+			left_index=True,
+			right_on="row_index",
+			how="left"
+		)
+
 	# Default weights if not provided
 	if weights is None:
 		weights = {
@@ -501,14 +515,7 @@ def determine_best_wavelet_representation(
 			'wavelet_sparsity': 0.15,        # Moderate importance for sparsity
 			'wavelet_entropy': 0.1,          # Moderate importance for signal decomposition efficiency
 
-			# Frequency and spectral metrics
-			'dominant_frequency': 0.1,       # Balanced importance for periodicity
-			'spectral_centroid': 0.1,        # Balanced importance for spectral focus
-			'spectral_bandwidth': 0.1,       # Balanced importance for frequency spread
-
 			# Signal-specific and derived metrics
-			'dynamic_cutoff': 0.05,          # Lower importance, context-dependent
-			'max_autocorrelation': 0.05,     # Lower importance, secondary feature
 			'smoothness': 0.05,              # Lower importance, aesthetic quality
 			'correlation': 0.05,             # Lower importance, secondary robustness
 			'avg_variance_across_levels': 0.1  # Balanced importance for decomposition consistency
@@ -744,7 +751,6 @@ def compare_and_rank_wavelet_metrics(
 
 	The next step is to repeat the process for the results from DWT, CWT, and SWT, which are combined into a single DataFrame. If compare_top_subset is set to True, only the top subset of results is compared, which is the default primarily for speed and efficiency. The top subset is typically sufficient for identifying the best configurations, and it reduces the computational burden of processing the full results. The combined results are then ranked and compared to determine the best overall wavelet representation across all types, with again all three files saved. The best combined results are returned, which contain the best wavelet configuration.
 	"""
-
 	modes = pywt.Modes.modes
 	# Define wavelet types and their evaluation functions
 	wavelet_types = {
@@ -765,6 +771,7 @@ def compare_and_rank_wavelet_metrics(
 	# Helper function to process wavelets
 	def process_wavelet_type(wavelet_type, wavelet_info, signal, modes, signal_type):
 		# try:
+		print(f"Processing {wavelet_type} wavelets...")
 		if wavelet_type == "DWT":
 			results, skipped_results = wavelet_info["evaluate"](signal, wavelet_info["wavelets"], modes, signal_type)
 			
@@ -806,7 +813,7 @@ def compare_and_rank_wavelet_metrics(
 				f"{file_path}{wavelet_type.lower()}_skipped_results.csv",
 				index=False
 			)
-
+		print(f"Results {len(results_df)} for {wavelet_type} Wavelet Type")
 		# Save results and rank them
 		if not results_df.empty:
 			results_df['wavelet_type'] = wavelet_type
@@ -862,6 +869,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 	Returns:
 	- volume_frequencies: List of volume frequencies.
 	"""
+	console.print(f"[bright_cyan]Starting signal processing...Output dir{output_dir}, Should use Parallel? {should_use_parallel}, Should rerun data? {rerun_data}[/bright_cyan]")
 	volume_frequencies = []
 	volume_paths_df = volume_paths_df.reset_index(drop=True)
 	volume_paths_df = volume_paths_df.sort_values(by=['table_row_index'])
@@ -938,8 +946,8 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 			'smoothed_kpss_pvalue': smoothed_stationarity_result.get("KPSS p-value"),
 		}
 		signal_types = {
-			"raw": merged_expanded_df['tokens_per_page'].values,
-			"smoothed": merged_expanded_df['smoothed_tokens_per_page'].values,
+			"raw": tokens_raw_signal,
+			"smoothed": tokens_smoothed_signal,
 		}
 		# Calculate metrics for each representation
 		signal_metrics_results = []
@@ -959,7 +967,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 		signal_metrics_df.to_csv("test.csv", index=False)
 		# Calculate wavelet metrics and signal metrics
 		best_wavelet_config = compare_and_rank_wavelet_metrics(
-			tokens_raw_signal, tokens_smoothed_signal, wavelet_analysis_dir, volume['htid'],wavelet_transform_settings, signal_metrics_df, should_use_parallel
+			tokens_raw_signal, tokens_smoothed_signal, wavelet_analysis_dir, volume['htid'], signal_metrics_df, wavelet_transform_settings, should_use_parallel
 		)
 		
 		
