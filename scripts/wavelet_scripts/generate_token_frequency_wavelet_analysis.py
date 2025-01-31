@@ -27,6 +27,19 @@ warnings.filterwarnings('ignore')
 # Initialize console
 console = Console()
 
+def convert_to_native_types(obj):
+    """
+    Convert numpy data types to native Python types.
+    """
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    else:
+        return obj
+
 ## WAVELET RANKING AND COMPARISON FUNCTIONS
 def filter_wavelets(wavelets: list, exclude_complex: bool = True) -> list:
 	"""
@@ -113,40 +126,53 @@ def compare_and_rank_wavelet_metrics(
 	for wavelet_type, wavelet_info in wavelet_types.items():
 		console.print(f"[blue]Processing {wavelet_type} wavelet type[/blue]")
 		wavelet_results = []
-		wavelet_skipped_results = []
+		individual_wavelet_directory = os.path.join(wavelet_directory, f"{wavelet_type}_results")
+		os.makedirs(individual_wavelet_directory, exist_ok=True)
 		for signal_type, settings in wavelet_transform_settings.items():
 			signal = raw_signal if signal_type == 'raw' else smoothed_signal
 			console.print(f"[blue]  Processing {signal_type} signal for {wavelet_type}[/blue]")
-
 			# Skip DWT and SWT for non-stationary signals
 			if wavelet_type in ["DWT", "SWT"] and not settings["is_stationary"]:
 				console.print(f"[yellow]  Skipping {wavelet_type} for {signal_type} signal (non-stationary).[/yellow]")
 				continue
-
 			# Process the wavelet type
 			results, skipped_results = process_wavelet_type(wavelet_type, wavelet_info, signal, modes, signal_type)
-			wavelet_results.append(results)
-			wavelet_skipped_results.append(skipped_results)
+			individual_signal_directory = os.path.join(individual_wavelet_directory, f"{signal_type}_results")
+			os.makedirs(individual_signal_directory, exist_ok=True)
+			individual_signal_file_path = individual_signal_directory + f"/{volume_id.replace('.', '_')}_"
+			if not results.empty:
+				results['wavelet_type'] = wavelet_type
+				results['signal_type'] = signal_type
+				best_config, ranked, subset_ranked, correlation_score, ranking_config = determine_best_wavelet_representation(
+					results, wavelet_type, signal_type, signal_metrics_df, False
+				)
+				suffix = f"{wavelet_type.lower()}_{signal_type}"
+				ranked.to_csv(f"{individual_signal_file_path}full_ranked_results.csv", index=False)
+				subset_ranked.to_csv(f"{individual_signal_file_path}subset_ranked_results.csv", index=False)
+				ranking_config = json.loads(json.dumps(ranking_config, default=convert_to_native_types))
+				with open(f"{individual_signal_file_path}ranking_config.json", "w") as f:
+					json.dump(ranking_config, f, indent=4)
+				generate_table(best_config[ ['wavelet', 'signal_type'] + table_cols], f"Best {wavelet_type} Wavelet Configuration (Correlation: {correlation_score:.2f})")
+				wavelet_results.append(ranked)
+			if not skipped_results.empty:
+				skipped_results['wavelet_type'] = wavelet_type
+				skipped_results['signal_type'] = signal_type
+				skipped_results.to_csv(f"{individual_signal_file_path}skipped_results.csv", index=False)
+				
 		# Save skipped results
 		results_df = pd.concat(wavelet_results, ignore_index=True)
-		skipped_df = pd.concat(wavelet_skipped_results, ignore_index=True)
-		if not skipped_df.empty:
-			skipped_df.to_csv(
-				f"{file_path}{wavelet_type.lower()}_skipped_results.csv",
-				index=False
-			)
+		
 		print(f"Results {len(results_df)} for {wavelet_type} Wavelet Type")
+		individual_wavelet_file_path = wavelet_directory + f"/{volume_id.replace('.', '_')}_"
 		# Save results and rank them
 		if not results_df.empty:
-			results_df['wavelet_type'] = wavelet_type
 			best_config, ranked, subset_ranked, correlation_score, ranking_config = determine_best_wavelet_representation(
 				results_df, wavelet_type, signal_metrics_df, weights, False
 			)
-			
-			suffix = f"{wavelet_type.lower()}_{signal_type}"
-			ranked.to_csv(f"{file_path}full_{wavelet_type.lower()}_results.csv", index=False)
-			subset_ranked.to_csv(f"{file_path}subset_{wavelet_type.lower()}_results.csv.csv", index=False)
-			with open(f"{file_path}{wavelet_type.lower()}_ranking_config.json", "w") as f:
+			ranked.to_csv(f"{individual_wavelet_file_path}full_ranked_results.csv", index=False)
+			subset_ranked.to_csv(f"{individual_wavelet_file_path}subset_ranked_results.csv", index=False)
+			ranking_config = json.loads(json.dumps(ranking_config, default=convert_to_native_types))
+			with open(f"{individual_wavelet_file_path}ranking_config.json", "w") as f:
 				json.dump(ranking_config, f, indent=4)
 			generate_table(best_config[ ['wavelet', 'signal_type'] + table_cols], f"Best {wavelet_type} Wavelet Configuration (Correlation: {correlation_score:.2f})")
 			# Append to all_results
@@ -168,6 +194,7 @@ def compare_and_rank_wavelet_metrics(
 		suffix = "" if compare_top_subset else "all_"
 		ranked_combined.to_csv(f"{file_path}combined_{suffix}results.csv", index=False)
 		subset_combined.to_csv(f"{file_path}combined_{suffix}subset.csv", index=False)
+		combined_config = json.loads(json.dumps(combined_config, default=convert_to_native_types))
 		with open(f"{file_path}combined_{suffix}ranking_config.json", "w") as f:
 			json.dump(combined_config, f, indent=4)
 		generate_table(best_combined[ ['wavelet', 'signal_type'] + table_cols], f"Best Combined Wavelet Configuration (Correlation: {combined_correlation:.2f})")

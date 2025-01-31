@@ -97,6 +97,7 @@ def normalize_weights_dynamically(existing_metrics: list, weights: dict, results
 
 	# If no valid metrics exist, raise an error
 	if not shared_metrics and not specific_metrics:
+		console.print(metrics)
 		raise ValueError("No valid metrics to normalize. Please check metric definitions.")
 
 	# Step 6: Apply Shared/Specific Weight Factors
@@ -294,6 +295,15 @@ def process_array(original_value: Any, reconstructed_value: Any) -> Tuple[Union[
 	except Exception as e:
 		console.print(f"[red]Error processing arrays: {e}[/red]")
 		return None, None
+	
+def convert_to_serializable(value):
+    """Converts NumPy types to Python native types for JSON serialization."""
+    if isinstance(value, (np.int64, np.int32)):
+        return int(value)
+    elif isinstance(value, (np.float64, np.float32, np.float16)):
+        return float(value)
+    else:
+        return value
 
 def compare_original_reconstructed_metrics(
 	original_df: pd.DataFrame, reconstructed_df: pd.DataFrame
@@ -373,7 +383,8 @@ def compare_original_reconstructed_metrics(
 	# Create DataFrame from all rows
 	comparison_df = pd.DataFrame(comparison_rows)
 	normalized_df = comparison_df.copy()
-	scaler = MinMaxScaler(feature_range=(0, 1))  # Ensure MinMaxScaler is always bounded within [0,1]
+	scaler_robust = RobustScaler()
+	scaler_minmax = MinMaxScaler(feature_range=(0, 1))
 
 	lower_is_better_metrics = [
 		col for col in comparison_df.columns if "diff" in col or col in [
@@ -383,7 +394,7 @@ def compare_original_reconstructed_metrics(
 
 	for col in comparison_df.columns:
 
-		if col.endswith("_normalized") or col == "row_index":
+		if col.endswith("_normalized") or (col in cols_to_add + ["row_index"]):
 			continue  # Skip already normalized columns or non-metric columns
 		max_value = comparison_df[col].max()
 		min_value = comparison_df[col].min()
@@ -397,11 +408,11 @@ def compare_original_reconstructed_metrics(
 				normalized_df[col + "_normalized"] = 1 - (comparison_df[col] / max_value)
 
 		# Normalize "higher is better" metrics using MinMaxScaler
-		elif col not in cols_to_add + ["row_index"]:
+		else:
 			try:
-				normalized_df[col + "_normalized"] = scaler.fit_transform(
-					comparison_df[col].values.reshape(-1, 1)
-				).flatten()
+				robust_scaled_values = scaler_robust.fit_transform(comparison_df[col].values.reshape(-1, 1)).flatten()
+				minmax_scaled_values = scaler_minmax.fit_transform(robust_scaled_values.reshape(-1, 1)).flatten()
+				normalized_df[col + "_normalized"] = minmax_scaled_values
 			except ValueError as e:
 				console.print(f"[red]Skipping normalization for {col}: {e}[/red]")
 				normalized_df[col + "_normalized"] = np.nan  # Assign NaN for debugging
@@ -453,13 +464,76 @@ def compare_original_reconstructed_metrics(
 	ranked_comparison_df = ranked_comparison_df.sort_values(by="reconstruction_score_sum", ascending=False).reset_index(drop=True)
 	ranked_comparison_df["rank_sum"] = ranked_comparison_df.index + 1  # Rank by summed method
 
-	for metric in metrics:
-		ranking_config["metrics"].append({
+	for metric in comparison_df.columns:
+		if metric.endswith("_normalized") or (metric in cols_to_add + ["row_index"]):
+			continue  # Skip already normalized columns or non-metric columns
+
+		metric_config = {
 			"metric": metric,
 			"weight": next((metric_weights[mt] for mt in metric_weights if metric.endswith(mt)), None),
 			"was_normalized": metric + "_normalized" in normalized_df.columns,
-			"was_inverted": metric in lower_is_better_metrics
-		})
+			"was_inverted": metric in lower_is_better_metrics,
+		}
+
+		# Ensure metric exists and is not entirely NaN
+		if metric in comparison_df and comparison_df[metric].notna().any():
+			metric_series = comparison_df[metric].dropna()
+			metric_config.update({
+				"max_value": convert_to_serializable(metric_series.max()),
+				"min_value": convert_to_serializable(metric_series.min()),
+				"std_dev": convert_to_serializable(metric_series.std()),
+				"mean": convert_to_serializable(metric_series.mean()),
+				"variance": convert_to_serializable(metric_series.var()),
+			})
+		else:
+			# Log that the metric was missing or had only NaNs
+			console.print(f"[yellow]Skipping metric '{metric}' - Not found or entirely NaN in comparison_df.[/yellow]")
+			metric_config.update({
+				"max_value": None,
+				"min_value": None,
+				"std_dev": None,
+				"mean": None,
+				"variance": None,
+				"correlation_weighted": None,
+				"correlation_sum": None,
+			})
+		
+		ranking_config["metrics"].append(metric_config)
+
+	# 🔹 Normalize and update ranking_config separately
+	for metric in normalized_df.columns:
+		if not metric.endswith("_normalized"):
+			continue  # Skip non-normalized metrics
+
+		base_metric = metric.replace("_normalized", "")
+		
+		# Ensure we only update existing metrics from comparison_df
+		for config in ranking_config["metrics"]:
+			if config["metric"] == base_metric:
+				# If metric exists in normalized_df and has valid values
+				if metric in normalized_df and normalized_df[metric].notna().any():
+					norm_series = normalized_df[metric].dropna()
+					config.update({
+						"normalized_max_value": convert_to_serializable(norm_series.max()),
+						"normalized_min_value": convert_to_serializable(norm_series.min()),
+						"normalized_std_dev": convert_to_serializable(norm_series.std()),
+						"normalized_mean": convert_to_serializable(norm_series.mean()),
+						"normalized_variance": convert_to_serializable(norm_series.var()),
+						# "correlation_weighted": convert_to_serializable(reconstruction_corr.get(metric, None)) if metric in reconstruction_corr else None,
+						# "correlation_sum": convert_to_serializable(reconstruction_corr_sum.get(metric, None)) if metric in reconstruction_corr_sum else None,
+					})
+				else:
+					console.print(f"[yellow]Skipping normalized metric '{metric}' - Not found or entirely NaN in normalized_df.[/yellow]")
+					config.update({
+						"normalized_max_value": None,
+						"normalized_min_value": None,
+						"normalized_std_dev": None,
+						"normalized_mean": None,
+						"normalized_variance": None,
+						# "correlation_weighted": None,
+						# "correlation_sum": None,
+					})
+				break  # Stop after updating the correct metric
 
 	ranking_config["reconstruction_score_weighted_max"] = normalized_df["reconstruction_score_weighted"].max()
 	ranking_config["reconstruction_score_weighted_min"] = normalized_df["reconstruction_score_weighted"].min()
@@ -473,7 +547,7 @@ def compare_original_reconstructed_metrics(
 	return ranked_comparison_df, ranking_config
 
 def determine_best_wavelet_representation(
-	results_df: pd.DataFrame, signal_type: str, original_signal_metrics_df: pd.DataFrame, weights: dict = None, is_combined: bool = False, epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05, percentage_of_results: float = 0.1, ignore_low_variance: bool = False
+	results_df: pd.DataFrame, wavelet_type: str, signal_type: str, original_signal_metrics_df: pd.DataFrame, is_combined: bool = False, epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05, percentage_of_results: float = 0.1, ignore_low_variance: bool = False
 ) -> tuple:
 	"""
 	This function determines the best wavelet representation by normalizing, combining scores, and ranking based on provided metrics. It starts by using either the passed weights or the existing default ones. Then it creates a ranking_config dictionary to log the decision-making process, including initial weights, transformations, and exclusions of metrics. Next we start checking for zero or near-zero variance metrics because they do not provide meaningful information for distinguishing between wavelet configurations. Any excluded metric is logged in the ranking_config with it's mean and standard deviation. After that step, we check if we need to log-transform negative values in `wavelet_energy_entropy`, which can distort normalization and weight calculations. The log transformation compresses large ranges while handling negatives, stabilizing the metric for comparison. This step assumes the metric’s distribution benefits from log-scaling to better represent its variation. Finally, we handle complex-valued metrics by taking the absolute value. Complex numbers might arise in certain wavelet calculations (e.g., from Fourier-based transforms). Magnitudes retain the essential information while making the data compatible with subsequent operations. 
@@ -486,8 +560,10 @@ def determine_best_wavelet_representation(
 	-----------
 	results_df : pd.DataFrame
 		DataFrame containing wavelet metrics.
+	wavelet_type : str
+		Type of wavelet being analyzed (e.g., "DWT", "CWT", "SWT").
 	signal_type : str
-		Type of signal being analyzed (e.g., "DWT", "CWT", "SWT").
+		Type of signal being analyzed (e.g., "raw" or "smoothed").
 	weights : dict, optional
 		Dictionary of weights for each metric. Default is pre-defined.
 	is_combined : bool, optional
@@ -512,57 +588,58 @@ def determine_best_wavelet_representation(
 	updated_ranking_config : dict
 		Dictionary containing the ranking configuration for the analysis.
 	"""
-	processed_results = []
-	reconstruction_ranking_configs = []
-	for signal_type in original_signal_metrics_df["signal_type"].unique():
-		console.print(f"Analyzing reconstruction accuracy for {signal_type} signal...")
-		subset_results_df = results_df[results_df.signal_type == signal_type]
-		subset_original_signal_metrics_df = original_signal_metrics_df[original_signal_metrics_df.signal_type == signal_type]
-		ranked_reconstruction_df, reconstruction_config = compare_original_reconstructed_metrics(
-			subset_original_signal_metrics_df,
-			subset_results_df
-		)
-		reconstruction_ranking_configs.append(reconstruction_config)
-		ranked_reconstruction_df.to_csv(f"ranked_reconstruction_df_{signal_type}.csv", index=False)
-		# Merge reconstruction_score into results_df
-		subset_results_df = subset_results_df.merge(
-			ranked_reconstruction_df[["row_index", "reconstruction_score_weighted", "reconstruction_score_sum"]],
-			left_index=True,
-			right_on="row_index",
-			how="left"
-		)
-		processed_results.append(subset_results_df)
-	
-	results_df = pd.concat(processed_results, ignore_index=True)
-	results_df = results_df.drop(columns=["row_index"], errors="ignore")
+	# processed_results = []
+	# reconstruction_ranking_configs = []
+	# for signal_type in original_signal_metrics_df["signal_type"].unique():
+	# 	console.print(f"Analyzing reconstruction accuracy for {signal_type} signal...")
+	# 	subset_results_df = results_df[results_df.signal_type == signal_type]
+	# 	subset_original_signal_metrics_df = original_signal_metrics_df[original_signal_metrics_df.signal_type == signal_type]
+	# 	ranked_reconstruction_df, reconstruction_config = compare_original_reconstructed_metrics(
+	# 		subset_original_signal_metrics_df,
+	# 		subset_results_df
+	# 	)
+	# 	reconstruction_ranking_configs.append(reconstruction_config)
+	# 	ranked_reconstruction_df.to_csv(f"ranked_reconstruction_df_{signal_type}.csv", index=False)
+	# 	# Merge reconstruction_score into results_df
+	# 	subset_results_df = subset_results_df.merge(
+	# 		ranked_reconstruction_df[["row_index", "reconstruction_score_weighted", "reconstruction_score_sum"]],
+	# 		left_index=True,
+	# 		right_on="row_index",
+	# 		how="left"
+	# 	)
+	# 	processed_results.append(subset_results_df)
+	processed_results_df, reconstruction_ranking_config = compare_original_reconstructed_metrics(original_signal_metrics_df[original_signal_metrics_df.signal_type == signal_type], results_df)
+	processed_results_df.to_csv(f"{signal_type}processed_results_df.csv", index=False)
+	merged_results_df = results_df.merge(processed_results_df[["row_index", "reconstruction_score_weighted", "reconstruction_score_sum"]], left_index=True, right_on="row_index", how="left")
+
+	results_df = merged_results_df.drop(columns=["row_index"], errors="ignore")
 	results_df = results_df.reset_index(drop=True)
 	results_df.to_csv("results_df.csv", index=False)
 
 	# Default weights if not provided
-	if weights is None:
-		weights = {
-			# Core reconstruction metrics
-			'wavelet_mse': 0.25,          # High importance for reconstruction accuracy
-			'wavelet_psnr': 0.25,         # High importance for signal quality
-			'emd_value': 0.2,             # High importance for reconstruction robustness
-			'kl_divergence': 0.2,         # High importance for signal similarity
-			# 'reconstruction_score': 0.4,   # Very high importance for overall performance
+	weights = {
+		# Core reconstruction metrics
+		'wavelet_mse': 0.25,          # High importance for reconstruction accuracy
+		'wavelet_psnr': 0.25,         # High importance for signal quality
+		'emd_value': 0.2,             # High importance for reconstruction robustness
+		'kl_divergence': 0.2,         # High importance for signal similarity
+		# 'reconstruction_score': 0.4,   # Very high importance for overall performance
 
-			# Wavelet-specific features
-			'wavelet_energy_entropy': 0.15,  # Moderate importance for signal compression
-			'wavelet_sparsity': 0.15,        # Moderate importance for sparsity
-			'wavelet_entropy': 0.1,          # Moderate importance for signal decomposition efficiency
+		# Wavelet-specific features
+		'wavelet_energy_entropy': 0.15,  # Moderate importance for signal compression
+		'wavelet_sparsity': 0.15,        # Moderate importance for sparsity
+		'wavelet_entropy': 0.1,          # Moderate importance for signal decomposition efficiency
 
-			# Signal-specific and derived metrics
-			'smoothness': 0.05,              # Lower importance, aesthetic quality
-			'correlation': 0.05,             # Lower importance, secondary robustness
-			'avg_variance_across_levels': 0.1  # Balanced importance for decomposition consistency
-		}
+		# Signal-specific and derived metrics
+		'smoothness': 0.05,              # Lower importance, aesthetic quality
+		'correlation': 0.05,             # Lower importance, secondary robustness
+		'avg_variance_across_levels': 0.1  # Balanced importance for decomposition consistency
+	}
 	ranking_config = {
 		"signal_type": signal_type,
 		"is_combined": is_combined,
 		"metrics": [],
-		"reconstruction_configs": reconstruction_ranking_configs
+		"reconstruction_config": reconstruction_ranking_config
 	}
 	# Populate ranking_config dynamically
 	for metric, original_weight in weights.items():
@@ -633,12 +710,15 @@ def determine_best_wavelet_representation(
 		and metric_config["metric"] in results_df.columns  # Ensure existence in `results_df`
 	]
 	normalized_df = results_df.copy()
-	scaler = RobustScaler()
+	scaler_robust = RobustScaler()
+	scaler_minmax = MinMaxScaler(feature_range=(0, 1))
 	prefix = 'combined_' if is_combined else ''
 
 	for metric in metrics:
 		try:
-			normalized_df[f"{prefix}{metric}_norm"] = scaler.fit_transform(results_df[[metric]])
+			robust_scaled_values = scaler_robust.fit_transform(results_df[[metric]]).flatten()
+			minmax_scaled_values = scaler_minmax.fit_transform(robust_scaled_values.reshape(-1, 1)).flatten()
+			normalized_df[f"{prefix}{metric}_norm"] = minmax_scaled_values
 		except ValueError as e:
 			console.print(f"[bright_red]Error normalizing '{metric}': {e}. Skipping this metric.[/bright_red]")
 			for metric_config in ranking_config["metrics"]:
@@ -743,7 +823,7 @@ def determine_best_wavelet_representation(
 	normalized_df[f"{prefix}normalized_diff"] = (
 		(normalized_df[f"{prefix}wavelet_norm_weighted_score"] - normalized_df[f"{prefix}wavelet_zscore_weighted_score"]).abs()
 		/ (normalized_df[f"{prefix}wavelet_norm_weighted_score"] + normalized_df[f"{prefix}wavelet_zscore_weighted_score"]).abs()
-	)
+	).abs()
 
 	# Final stability-adjusted score
 	normalized_df[f"{prefix}final_score"] = (
@@ -764,6 +844,21 @@ def determine_best_wavelet_representation(
 	ranked_results[f"{prefix}wavelet_summed_rank"] = ranked_results.index + 1
 
 	ranked_results.to_csv(f"test_{signal_type}_ranked_results.csv", index=False)
+
+	for metric_config in updated_ranking_config["metrics"]:
+		if metric_config["metric"] in ranked_results.columns:
+			metric_config[f"{prefix}mean"] = ranked_results[metric_config["metric"]].mean()
+			metric_config[f"{prefix}std"] = ranked_results[metric_config["metric"]].std()
+			metric_config[f"{prefix}max"] = ranked_results[metric_config["metric"]].max()
+			metric_config[f"{prefix}min"] = ranked_results[metric_config["metric"]].min()
+			metric_config[f"{prefix}mean_normalized"] = ranked_results[f"{prefix}{metric_config['metric']}_norm"].mean()			
+			metric_config[f"{prefix}std_normalized"] = ranked_results[f"{prefix}{metric_config['metric']}_norm"].std()
+			metric_config[f"{prefix}max_normalized"] = ranked_results[f"{prefix}{metric_config['metric']}_norm"].max()
+			metric_config[f"{prefix}min_normalized"] = ranked_results[f"{prefix}{metric_config['metric']}_norm"].min()
+			# calculate correlation with final_score
+			metric_config[f"{prefix}final_score_correlation"] = ranked_results[[metric_config["metric"], f"{prefix}final_score"]].corr().iloc[0, 1]
+			# calculate correlation with summed_score
+			metric_config[f"{prefix}summed_score_correlation"] = ranked_results[[metric_config["metric"], f"{prefix}wavelet_summed_norm_score"]].corr().iloc[0, 1]
 
 	# Dynamically select the top N% of ranked results
 	num_top_results = max(1, int(len(ranked_results) * percentage_of_results))  # At least one result
