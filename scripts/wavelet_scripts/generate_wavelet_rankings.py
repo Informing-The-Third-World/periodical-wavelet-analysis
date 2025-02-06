@@ -27,6 +27,29 @@ warnings.filterwarnings('ignore')
 console = Console()
 
 ## WAVELET RANKING AND COMPARISON FUNCTIONS
+def weight_scores(df: pd.DataFrame, metric_weights: dict, metric_type: str) -> pd.DataFrame:
+	norm_type = "_norm" if metric_type == "signal" else "_normalized"
+	total_scores_weighted = []
+	for _, row in df.iterrows():
+		weighted_scores = []
+		for metric, weight in metric_weights.items():
+			metric_columns = [col for col in df.columns if col == metric + norm_type]
+			if metric_columns:
+				metric_score = row[metric_columns].mean()  # Average across related normalized metrics
+				weighted_scores.append(weight * metric_score)
+
+		total_scores_weighted.append(sum(weighted_scores))
+
+	df[f"{metric_type}_score_weighted"] = total_scores_weighted
+
+	# Compute **simple summation reconstruction score**
+	columns = [col for col in df.columns if col.endswith(norm_type)]
+	df[f"{metric_type}_score_sum"] = df[columns].sum(axis=1)
+	ranked_comparison_df = df.sort_values(by=f"{metric_type}_score_weighted", ascending=False).reset_index(drop=True)
+	ranked_comparison_df[f"{metric_type}_rank_weighted"] = ranked_comparison_df.index + 1  # Rank by weighted method
+	return ranked_comparison_df
+
+
 def normalize_weights_dynamically(existing_metrics: list, weights: dict, results_df: pd.DataFrame, ranking_config: dict, threshold: float = 0.9, shared_weight_factor: float = 0.7, specific_weight_factor: float = 0.3,min_weight: float = 0.05, max_weight: float = 0.5) -> tuple:
 	"""
 	This function dynamically normalize weights for metrics based on variance, presence, and distribution across shared and specific metrics. It ensures that metrics are appropriately prioritized, reflecting their relevance and availability, while also maintaining consistency across all metrics. It first checks the variance and presence of each metric. Variance reflects the amount of variation in a metric across the dataset. Metrics with low variance may not provide meaningful distinctions between wavelet configurations, as they exhibit minimal variability. Presence indicates the proportion of data rows where the metric is non-null. Metrics with higher presence values are more widely applicable and thus hold more weight in decision-making. 
@@ -430,6 +453,44 @@ def compare_original_reconstructed_metrics(
 		"wasserstein": 0.4,       # Medium-low weight for Wasserstein distances
 		"avg_diff": 0.3,          # Low weight for average difference
 		"total_diff": 0.2,        # Low weight for total difference
+	}
+
+	reconstruction_metric_weights = {
+		# **Cluster 1: Prominence & Amplitude-Based Metrics (Moderate Importance)**
+		"prominence_min_diff_normalized": 0.3,
+		"positive_amplitudes_dtw_normalized": 0.35,
+		"positive_amplitudes_euclidean_normalized": 0.35,
+		"positive_amplitudes_wasserstein_normalized": 0.35,
+		"avg_prominence_diff_normalized": 0.3,
+		"relative_prominences_avg_diff_normalized": 0.3,
+		"relative_prominences_wasserstein_normalized": 0.3,
+		"positive_frequencies_dtw_normalized": 0.35,
+		"positive_frequencies_euclidean_normalized": 0.35,
+		"positive_frequencies_wasserstein_normalized": 0.35,
+
+		# **Cluster 2: Spectral & Structural Fidelity (Highest Importance)**
+		"spectral_centroid_diff_normalized": 0.6,
+		"spectral_magnitude_diff_normalized": 0.6,
+		"dynamic_cutoff_diff_normalized": 0.5,
+		"relative_prominences_total_diff_normalized": 0.5,
+		"prominence_max_diff_normalized": 0.5,
+		"amplitude_max_diff_normalized": 0.5,
+		"frequency_max_diff_normalized": 0.5,
+		"spectral_bandwidth_diff_normalized": 0.5,
+		"num_fft_peaks_diff_normalized": 0.4,
+		"relative_num_peaks_diff_normalized": 0.4,  # Fixed typo
+		"dominant_frequency_diff_normalized": 0.5,
+		"max_autocorrelation_diff_normalized": 0.5,  # Ensured it's here
+
+		# **Cluster 3: Alignment-Based Metrics (Lower Importance)**
+		"relative_right_bases_global_alignment_score_normalized": 0.1,
+		"relative_right_bases_matcher_alignment_score_normalized": 0.1,
+		"relative_left_bases_global_alignment_score_normalized": 0.1,
+		"relative_left_bases_matcher_alignment_score_normalized": 0.1,
+		"upper_envelope_diff_normalized": 0.2,
+		"lower_envelope_diff_normalized": 0.2,
+		"relative_peaks_matcher_alignment_score_normalized": 0.2,
+		"relative_peaks_global_alignment_score_normalized": 0.2,
 	}
 
 	# Compute reconstruction scores
