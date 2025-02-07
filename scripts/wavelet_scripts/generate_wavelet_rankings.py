@@ -335,8 +335,7 @@ def convert_to_serializable(value):
 	else:
 		return value
 
-def preprocess_reconstructed_metrics(
-	original_df: pd.DataFrame, reconstructed_df: pd.DataFrame
+def preprocess_reconstructed_metrics(original_df: pd.DataFrame, reconstructed_df: pd.DataFrame
 ) -> pd.DataFrame:
 	"""
 	Compares the outputs from the calculate_signal_metrics function for the original signal versus all reconstructed wavelets. It assumes that the comparison will be within signal type (so not across raw and smoothed results). It also assumes that the original_df contains only one row of data. The function compares the metrics for each wavelet and returns a DataFrame with the comparison results. It uses a combination of sequence alignment, DTW, and other distance measures to compare the metrics. 
@@ -582,18 +581,19 @@ def calculate_weighted_scores_by_metric_type(df: pd.DataFrame, metric_weights: d
 
 		total_scores_weighted.append(sum(weighted_scores))
 
-	df[f"{metric_type}_score_weighted"] = total_scores_weighted
-
+	df[f"{metric_type}_normalized_weighted_score"] = total_scores_weighted
+	ranked_comparison_df = df.sort_values(by=f"{metric_type}_normalized_weighted_score", ascending=False).reset_index(drop=True)
+	ranked_comparison_df[f"{metric_type}_normalized_weighted_rank"] = ranked_comparison_df.index + 1  # Rank by weighted method
 	# Compute **simple summation reconstruction score**
 	columns = list(metric_weights.keys())
-	df[f"{metric_type}_score_sum"] = df[columns].sum(axis=1)
-	ranked_comparison_df = df.sort_values(by=f"{metric_type}_score_weighted", ascending=False).reset_index(drop=True)
-	ranked_comparison_df[f"{metric_type}_rank_weighted"] = ranked_comparison_df.index + 1  # Rank by weighted method
+	ranked_comparison_df[f"{metric_type}_normalized_summed_score"] = df[columns].sum(axis=1)
+	ranked_comparison_df = ranked_comparison_df.sort_values(by=f"{metric_type}_normalized_summed_score", ascending=False).reset_index(drop=True)
+	ranked_comparison_df[f"{metric_type}_normalized_summed_rank"] = ranked_comparison_df.index + 1  # Rank by summed method
 	return ranked_comparison_df, columns
 
-def normalize_weights_dynamically(existing_metrics: list, weights: dict, results_df: pd.DataFrame, ranking_config: dict, metric_type: str, threshold: float = 0.9, shared_weight_factor: float = 0.7, specific_weight_factor: float = 0.3,min_weight: float = 0.05, max_weight: float = 0.5) -> tuple:
+def normalize_weights_dynamically(metrics: list, weights: dict, results_df: pd.DataFrame, ranking_config: dict, threshold: float = 0.9, shared_weight_factor: float = 0.7, specific_weight_factor: float = 0.3,min_weight: float = 0.05, max_weight: float = 0.5) -> tuple:
 	"""
-	This function dynamically normalize weights for metrics based on variance, presence, and distribution across shared and specific metrics. It ensures that metrics are appropriately prioritized, reflecting their relevance and availability, while also maintaining consistency across all metrics. It first checks the variance and presence of each metric. Variance reflects the amount of variation in a metric across the dataset. Metrics with low variance may not provide meaningful distinctions between wavelet configurations, as they exhibit minimal variability. Presence indicates the proportion of data rows where the metric is non-null. Metrics with higher presence values are more widely applicable and thus hold more weight in decision-making. 
+	This function dynamically normalize weights for metrics based on variance, presence, and distribution across shared and specific metrics. It should be run on the normalized values to avoid skewing results. It ensures that metrics are appropriately prioritized, reflecting their relevance and availability, while also maintaining consistency across all metrics. It first checks the variance and presence of each metric. Variance reflects the amount of variation in a metric across the dataset. Metrics with low variance may not provide meaningful distinctions between wavelet configurations, as they exhibit minimal variability. Presence indicates the proportion of data rows where the metric is non-null. Metrics with higher presence values are more widely applicable and thus hold more weight in decision-making. 
 	
 	The function then identifies shared and specific metrics based on a predefined threshold. Shared metrics are those with a presence above the threshold, while specific metrics have a presence below the threshold. Shared metrics are prioritized over specific metrics, as they are more widely applicable and thus more likely to influence the final ranking. Weights are dynamically adjusted by combining the initial weight with a factor derived from the metric’s variance and presence. Shared metrics receive a higher proportion (e.g., 70%) of the total weight allocation, reflecting their broader relevance, while specific metrics are allocated the remaining proportion (e.g., 30%). The final weights are normalized to sum to 1, ensuring that the total weight is consistent across all metrics. This is crucial for proportional calculations when combining metric scores. Without normalization, metrics with higher raw weights could disproportionately skew results. As a final sanity check, the code loops through the weights and checks if any have been weighted to zero. If that happens it raises an error, as it indicates an unexpected omission or a potential issue with the weighting logic and stops the process. As long as there are no zeros, the function logs the final weights and other relevant information in the ranking configuration for future reference, and then returns the normalized weights and updated ranking configuration.
 
@@ -625,16 +625,13 @@ def normalize_weights_dynamically(existing_metrics: list, weights: dict, results
 	ranking_config : dict
 		Updated ranking configuration with normalized weights.
 	"""
-	norm_type = "_norm" if metric_type == "signal" else "_normalized"
-	metrics = [metric for metric in existing_metrics if metric in results_df.columns]
-	subset_metrics = [metric.split(norm_type)[0] for metric in metrics]
-
 	# Step 1: Compute Variance and Presence
 	metric_variances = results_df[metrics].var()
 	metric_presence = results_df[metrics].notna().mean()
 
 	# Step 2: Log Variance and Presence in ranking_config
 	for metric in metrics:
+		metric = metric.split("_normalized")[0]  # Remove "_normalized" suffix
 		for metric_config in ranking_config["metrics"]:
 			if metric_config["metric"] == metric:
 				metric_config["variance"] = metric_variances.get(metric, None)
@@ -676,6 +673,7 @@ def normalize_weights_dynamically(existing_metrics: list, weights: dict, results
 			max_weight
 		)
 		# Log "shared" flag in ranking_config
+		metric = metric.split("_normalized")[0]  # Remove "_normalized" suffix
 		for metric_config in ranking_config["metrics"]:
 			if metric_config["metric"] == metric:
 				metric_config["was_shared"] = True
@@ -686,6 +684,7 @@ def normalize_weights_dynamically(existing_metrics: list, weights: dict, results
 			max_weight
 		)
 		# Log "specific" flag in ranking_config
+		metric = metric.split("_normalized")[0]  # Remove "_normalized" suffix
 		for metric_config in ranking_config["metrics"]:
 			if metric_config["metric"] == metric:
 				metric_config["was_specific"] = True
@@ -709,12 +708,97 @@ def normalize_weights_dynamically(existing_metrics: list, weights: dict, results
 
 	# Step 9: Log Final Weights in ranking_config
 	for metric, final_weight in normalized_weights.items():
+		metric = metric.split("_normalized")[0]  # Remove "_normalized" suffix
 		for metric_config in ranking_config["metrics"]:
 			if metric_config["metric"] == metric:
 				metric_config["final_weight"] = final_weight
 				metric_config["normalized_weight"] = final_weight / sum(normalized_weights.values())  # Normalize to sum to 1
 
 	return normalized_weights, ranking_config
+
+def calculate_normalized_weighted_score_by_metric_type(normalized_df: pd.DataFrame, updated_metrics: list, ranking_config: dict, weights: dict, prefix: str, metric_type: str, epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05,):
+	normalized_weights, updated_ranking_config = normalize_weights_dynamically(updated_metrics, weights, normalized_df, ranking_config)
+
+	# Calculate weighted penalty for missing and ignored metrics
+	normalized_df[f'{prefix}{metric_type}_missing_metrics_count'] = normalized_df.apply(
+		lambda row: sum(
+			normalized_weights.get(metric, 0) * (1 if pd.isna(row[f"{prefix}{metric}_normalized"]) else 0.5)
+			for metric in updated_metrics
+			if f"{prefix}{metric}_normalized" in normalized_df.columns
+			and (pd.isna(row[f"{prefix}{metric}_normalized"]) or updated_ranking_config["metrics"][updated_metrics.index(metric + "_normalized")]["ignore_metric"])
+		),
+		axis=1
+	)
+	
+	# Compute weighted scores for norm and z-score
+	ranking_config["penalty_weight"] = penalty_weight
+	normalized_df[f"{prefix}{metric_type}_dynamically_normalized_weighted_score"] = normalized_df.apply(
+		lambda row: (
+			sum(
+				normalized_weights[metric] * row[f"{prefix}{metric}_normalized"]
+				for metric in updated_metrics
+				if pd.notna(row[f"{prefix}{metric}_normalized"])
+			) / max(sum(normalized_weights[metric] for metric in updated_metrics if pd.notna(row[f"{prefix}{metric}_normalized"])), epsilon_threshold)
+			- penalty_weight * row[f"{prefix}missing_metrics_count"]  # Use precomputed penalty
+		),
+		axis=1
+	)
+
+	normalized_df[f"{prefix}{metric_type}_dynamically_normalized_zscore_weighted_score"] = normalized_df.apply(
+		lambda row: (
+			sum(
+				normalized_weights[metric] * row[f"{prefix}{metric}_zscore"]
+				for metric in updated_metrics
+				if pd.notna(row[f"{prefix}{metric}_zscore"])
+			) / max(sum(normalized_weights[metric] for metric in updated_metrics if pd.notna(row[f"{prefix}{metric}_zscore"])), epsilon_threshold)
+		),
+		axis=1
+	)
+
+	# Compute summed normalized score
+	normalized_df[f"{prefix}{metric_type}_normalized_summed_score"] = normalized_df.apply(
+		lambda row: sum(
+			row[f"{prefix}{metric}_normalized"]
+			for metric in updated_metrics
+			if pd.notna(row[f"{prefix}{metric}_normalized"])
+		),
+		axis=1
+	)
+
+	# Normalize summed score so that it has a comparable range
+	max_summed_score = normalized_df[f"{prefix}{metric_type}_normalized_summed_score"].max()
+	if max_summed_score > 0:
+		normalized_df[f"{prefix}{metric_type}_normalized_summed_score"] /= max_summed_score
+	else:
+		console.print("[yellow]Max summed normalized score is zero! Assigning equal scores.[/yellow]")
+		normalized_df[f"{prefix}{metric_type}_normalized_summed_score"] = 1 / len(updated_metrics)  # Assign equal importance
+
+
+	# Calculate normalized diff
+	normalized_df[f"{prefix}{metric_type}_normalized_diff"] = (
+		(normalized_df[f"{prefix}{metric_type}_dynamically_normalized_weighted_score"] - normalized_df[f"{prefix}{metric_type}_dynamically_normalized_zscore_weighted_score"]).abs()
+		/ (normalized_df[f"{prefix}{metric_type}_dynamically_normalized_weighted_score"] + normalized_df[f"{prefix}{metric_type}_dynamically_normalized_zscore_weighted_score"]).abs()
+	).abs()
+
+	# Final stability-adjusted score
+	normalized_df[f"{prefix}{metric_type}_dynamic_score"] = (
+		normalized_df[f"{prefix}{metric_type}_dynamically_normalized_weighted_score"]
+		- penalty_weight * normalized_df[f"{prefix}{metric_type}_normalized_diff"]
+	)
+
+	# Rank results by final_score (Weighted method)
+	ranked_results = normalized_df.sort_values(
+		by=f"{prefix}{metric_type}_dynamic_score", ascending=False
+	).reset_index(drop=True)
+	ranked_results[f"{prefix}{metric_type}_dynamic_rank"] = ranked_results.index + 1
+
+	# Rank results by summed normalized score (Summing method)
+	ranked_results = ranked_results.sort_values(
+		by=f"{prefix}{metric_type}_normalized_summed_score", ascending=False
+	).reset_index(drop=True)
+	ranked_results[f"{prefix}{metric_type}_dynamic_summed_rank"] = ranked_results.index + 1
+
+	return ranked_results, updated_ranking_config
 
 def redo_determine_best_wavelet_representation(
 	results_df: pd.DataFrame, wavelet_type: str, signal_type: str, original_signal_metrics_df: pd.DataFrame, is_combined: bool = False, epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05, percentage_of_results: float = 0.1, ignore_low_variance: bool = False
@@ -740,6 +824,25 @@ def redo_determine_best_wavelet_representation(
 	# Calculate weighted normalized scores
 	partial_weighted_scored_df, reconstruction_columns = calculate_weighted_scores_by_metric_type(preprocessed_results_df, RECONSTRUCTION_METRIC_WEIGHTS, "reconstruction")
 	full_weighted_scored_df, signal_columns = calculate_weighted_scores_by_metric_type(partial_weighted_scored_df, SIGNAL_METRIC_WEIGHTS, "signal")
+
+	updated_reconstruction_metrics = [
+		metric_config["metric"] + "_normalized"
+		for metric_config in ranking_config["metrics"]
+		if not metric_config.get("ignore_metric", False)  # Exclude ignored metrics
+		and metric_config["metric"] + "_normalized" in reconstruction_columns  # Ensure existence in `results_df`
+	]
+
+	updated_signal_metrics = [
+		metric_config["metric"] + "_normalized"
+		for metric_config in ranking_config["metrics"]
+		if not metric_config.get("ignore_metric", False)  # Exclude ignored metrics
+		and metric_config["metric"] + "_normalized" in signal_columns  # Ensure existence in `results_df`
+	]
+	
+
+	# Normalize weights dynamically
+	dynamically_ranked_results, updated_ranking_config = calculate_normalized_weighted_score_by_metric_type(full_weighted_scored_df, updated_reconstruction_metrics, ranking_config, RECONSTRUCTION_METRIC_WEIGHTS, prefix, "reconstruction", epsilon_threshold, penalty_weight)
+	final_ranked_results, final_ranking_config = calculate_normalized_weighted_score_by_metric_type(dynamically_ranked_results, updated_signal_metrics, updated_ranking_config, SIGNAL_METRIC_WEIGHTS, prefix, "signal", epsilon_threshold, penalty_weight)
 
 def determine_best_wavelet_representation(
 	results_df: pd.DataFrame, wavelet_type: str, signal_type: str, original_signal_metrics_df: pd.DataFrame, is_combined: bool = False, epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05, percentage_of_results: float = 0.1, ignore_low_variance: bool = False
