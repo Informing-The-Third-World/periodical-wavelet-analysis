@@ -121,8 +121,7 @@ def compare_and_rank_wavelet_metrics(
 	all_results = []
 	file_path = wavelet_directory + f"/{volume_id.replace('.', '_')}_"
 	console.print(f"[bright_cyan]Processing file path {file_path}[/bright_cyan]")
-	# Ensure results are non-empty before ranking
-	table_cols = ['wavelet_rank', 'final_wavelet_rank', 'final_score', 'wavelet_norm_weighted_score', 'normalized_diff', 'wavelet_zscore_weighted_score', 'missing_metrics_count']
+
 	for wavelet_type, wavelet_info in wavelet_types.items():
 		console.print(f"[blue]Processing {wavelet_type} wavelet type[/blue]")
 		wavelet_results = []
@@ -143,16 +142,18 @@ def compare_and_rank_wavelet_metrics(
 			if not results.empty:
 				results['wavelet_type'] = wavelet_type
 				results['signal_type'] = signal_type
-				best_config, ranked, subset_ranked, correlation_score, ranking_config = determine_best_wavelet_representation(
-					results, wavelet_type, signal_type, signal_metrics_df, False
+				results['htid'] = volume_id
+				ranked, subset_ranked, ranking_config = determine_best_wavelet_representation(
+					results, signal_type, signal_metrics_df[signal_metrics_df.signal_type == signal_type]
 				)
+
 				suffix = f"{wavelet_type.lower()}_{signal_type}"
 				ranked.to_csv(f"{individual_signal_file_path}full_ranked_results.csv", index=False)
 				subset_ranked.to_csv(f"{individual_signal_file_path}subset_ranked_results.csv", index=False)
 				ranking_config = json.loads(json.dumps(ranking_config, default=convert_to_native_types))
 				with open(f"{individual_signal_file_path}ranking_config.json", "w") as f:
 					json.dump(ranking_config, f, indent=4)
-				generate_table(best_config[ ['wavelet', 'signal_type'] + table_cols], f"Best {wavelet_type} Wavelet Configuration (Correlation: {correlation_score:.2f})")
+				
 				wavelet_results.append(ranked)
 			if not skipped_results.empty:
 				skipped_results['wavelet_type'] = wavelet_type
@@ -166,7 +167,7 @@ def compare_and_rank_wavelet_metrics(
 		individual_wavelet_file_path = wavelet_directory + f"/{volume_id.replace('.', '_')}_"
 		# Save results and rank them
 		if not results_df.empty:
-			best_config, ranked, subset_ranked, correlation_score, ranking_config = determine_best_wavelet_representation(
+			ranked, subset_ranked, ranking_config = determine_best_wavelet_representation(
 				results_df, wavelet_type, signal_metrics_df, weights, False
 			)
 			ranked.to_csv(f"{individual_wavelet_file_path}full_ranked_results.csv", index=False)
@@ -174,7 +175,7 @@ def compare_and_rank_wavelet_metrics(
 			ranking_config = json.loads(json.dumps(ranking_config, default=convert_to_native_types))
 			with open(f"{individual_wavelet_file_path}ranking_config.json", "w") as f:
 				json.dump(ranking_config, f, indent=4)
-			generate_table(best_config[ ['wavelet', 'signal_type'] + table_cols], f"Best {wavelet_type} Wavelet Configuration (Correlation: {correlation_score:.2f})")
+
 			# Append to all_results
 			if compare_top_subset:
 				subset_ranked['wavelet_type'] = wavelet_type
@@ -197,7 +198,6 @@ def compare_and_rank_wavelet_metrics(
 		combined_config = json.loads(json.dumps(combined_config, default=convert_to_native_types))
 		with open(f"{file_path}combined_{suffix}ranking_config.json", "w") as f:
 			json.dump(combined_config, f, indent=4)
-		generate_table(best_combined[ ['wavelet', 'signal_type'] + table_cols], f"Best Combined Wavelet Configuration (Correlation: {combined_correlation:.2f})")
 		return best_combined
 	else:
 		console.print("[red]No valid wavelet configurations found.[/red]")

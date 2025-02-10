@@ -85,99 +85,103 @@ RECONSTRUCTION_METRIC_WEIGHTS = {
 }
 
 LOWER_IS_BETTER_METRICS = [
-    "prominence_min_diff_normalized",
-    "prominence_max_diff_normalized",
-    "avg_prominence_diff_normalized",
-    "relative_prominences_avg_diff_normalized",
-    "relative_prominences_total_diff_normalized",
-    "positive_amplitudes_dtw_normalized",
-    "positive_amplitudes_euclidean_normalized",
-    "positive_amplitudes_wasserstein_normalized",
-    "positive_frequencies_dtw_normalized",
-    "positive_frequencies_euclidean_normalized",
-    "positive_frequencies_wasserstein_normalized",
-    "dynamic_cutoff_diff_normalized",
-    "frequency_max_diff_normalized",
-    "spectral_bandwidth_diff_normalized",
-    "num_fft_peaks_diff_normalized",
-    "relative_num_peaks_diff_normalized",
-    "dominant_frequency_diff_normalized",
-    "spectral_magnitude_diff_normalized",
-    "spectral_centroid_diff_normalized",
-    "relative_right_bases_global_alignment_score_normalized",
-    "relative_right_bases_matcher_alignment_score_normalized",
-    "relative_left_bases_global_alignment_score_normalized",
-    "relative_left_bases_matcher_alignment_score_normalized",
-    "relative_peaks_matcher_alignment_score_normalized",
-    "relative_peaks_global_alignment_score_normalized",
-    "upper_envelope_diff_normalized",
-    "lower_envelope_diff_normalized",
-    "kl_divergence_norm",
-    "emd_value_norm",
-    "max_autocorrelation_diff_normalized"
+	"prominence_min_diff_normalized",
+	"prominence_max_diff_normalized",
+	"avg_prominence_diff_normalized",
+	"relative_prominences_avg_diff_normalized",
+	"relative_prominences_total_diff_normalized",
+	"positive_amplitudes_dtw_normalized",
+	"positive_amplitudes_euclidean_normalized",
+	"positive_amplitudes_wasserstein_normalized",
+	"positive_frequencies_dtw_normalized",
+	"positive_frequencies_euclidean_normalized",
+	"positive_frequencies_wasserstein_normalized",
+	"dynamic_cutoff_diff_normalized",
+	"frequency_max_diff_normalized",
+	"spectral_bandwidth_diff_normalized",
+	"num_fft_peaks_diff_normalized",
+	"relative_num_peaks_diff_normalized",
+	"dominant_frequency_diff_normalized",
+	"spectral_magnitude_diff_normalized",
+	"spectral_centroid_diff_normalized",
+	"relative_right_bases_global_alignment_score_normalized",
+	"relative_right_bases_matcher_alignment_score_normalized",
+	"relative_left_bases_global_alignment_score_normalized",
+	"relative_left_bases_matcher_alignment_score_normalized",
+	"relative_peaks_matcher_alignment_score_normalized",
+	"relative_peaks_global_alignment_score_normalized",
+	"upper_envelope_diff_normalized",
+	"lower_envelope_diff_normalized",
+	"kl_divergence_norm",
+	"emd_value_norm",
+	"max_autocorrelation_diff_normalized"
 ]
 
 def generate_metric_config(metric: str, weight: float) -> dict:
-    """
-    Generates a metric configuration dictionary.
+	"""
+	Generates a metric configuration dictionary.
 
-    Parameters:
-    -----------
-    metric : str
-        The metric name.
-    weight : float
-        The weight of the metric.
+	Parameters:
+	-----------
+	metric : str
+		The metric name.
+	weight : float
+		The weight of the metric.
 
-    Returns:
-    --------
-    metric_config : dict
-        Dictionary containing the metric configuration.
-    """
-    metric = metric.split("_normalized")[0]  # Remove "_normalized" suffix
-    return {
-        "metric": metric,
-        "original_weight": weight,
+	Returns:
+	--------
+	metric_config : dict
+		Dictionary containing the metric configuration.
+	"""
+	metric = metric.split("_normalized")[0]  # Remove "_normalized" suffix
+	return {
+		"metric": metric,
+		"original_weight": weight,
 		"normalized_weight": None,
-        "was_normalized": False,
-        "was_inverted": False,
-        "was_shared": False,
-        "was_specific": False,
-        "max_value": None,
-        "min_value": None,
-        "std_dev": None,
-        "mean": None,
-        "variance": None,
-        "presence": None,
-    }
+		"was_normalized": False,
+		"was_inverted": False,
+		"was_shared": False,
+		"was_specific": False,
+		"max_value": None,
+		"min_value": None,
+		"std_dev": None,
+		"mean": None,
+		"variance": None,
+		"presence": None,
+		"ignore_metric": False,
+		"removal_reason": None,
+		"was_log_transformed": False,
+	}
 
-def generate_ranking_config(is_combined: bool, signal_type: str) -> dict:
-    """
-    Generates a ranking configuration dictionary based on the provided signal and reconstruction metric weights. It logs the initial weights, transformations, and exclusions of metrics for future reference. The configuration is used to track the normalization, inversion, and correlation of metrics during the ranking process. 
+def generate_ranking_config(signal_type: str, prefix: str = "") -> dict:
+	"""
+	Generates a ranking configuration dictionary based on the provided signal and reconstruction metric weights. It logs the initial weights, transformations, and exclusions of metrics for future reference. The configuration is used to track the normalization, inversion, and correlation of metrics during the ranking process. 
 
-    Parameters:
-    -----------
-    is_combined : bool
-        Flag indicating whether the metrics are combined.
-    signal_type : str
-        The type of signal being analyzed.
-    
-    Returns:
-    --------
-    ranking_config : dict
-        Dictionary containing the ranking configuration.
-    """
-    ranking_config = {
-        "signal_type": signal_type,
-        "is_combined": is_combined,
-        "metrics": []
-    }
-    for metric, weight in SIGNAL_METRIC_WEIGHTS.items():
-        ranking_config["metrics"].append(generate_metric_config(metric, weight))
-    
-    for metric, weight in RECONSTRUCTION_METRIC_WEIGHTS.items():
-        ranking_config["metrics"].append(generate_metric_config(metric, weight))
-    
-    return ranking_config
+	Parameters:
+	-----------
+	signal_type : str
+		The type of signal being analyzed.
+	prefix : str
+		Prefix for column names (e.g., "combined_" for merged datasets).
+	
+	Returns:
+	--------
+	ranking_config : dict
+		Dictionary containing the ranking configuration.
+	"""
+	ranking_config = {
+		"signal_type": signal_type,
+		"metrics": []
+	}
+	if prefix:
+		ranking_config["comparison_prefix"] = prefix
+	for metric, weight in SIGNAL_METRIC_WEIGHTS.items():
+		ranking_config["metrics"].append(generate_metric_config(metric, weight))
+	
+	for metric, weight in RECONSTRUCTION_METRIC_WEIGHTS.items():
+		ranking_config["metrics"].append(generate_metric_config(metric, weight))
+	
+	return ranking_config
 
 ## WAVELET RANKING PREPROCESSING FUNCTIONS
 def run_global_sequence_alignment(original_sequence: list, reconstructed_sequence: list, placeholder: int = -1) -> int:
@@ -379,24 +383,24 @@ def preprocess_reconstructed_metrics(original_df: pd.DataFrame, reconstructed_df
 						continue
 					
 					if metric in {"relative_peaks", "relative_left_bases", "relative_right_bases"}:
-						reconstructed_row[f"{metric}_matcher_alignment_score"] = align_arrays(original_array, reconstructed_array)
-						reconstructed_row[f"{metric}_global_alignment_score"] = run_global_sequence_alignment(original_array, reconstructed_array)
+						reconstructed_df.loc[idx, f"{metric}_matcher_alignment_score"] = align_arrays(original_array, reconstructed_array)
+						reconstructed_df.loc[idx,f"{metric}_global_alignment_score"] = run_global_sequence_alignment(original_array, reconstructed_array)
 					elif metric in {"positive_frequencies", "positive_amplitudes"}:
-						reconstructed_row[f"{metric}_dtw"] = compare_distributions(original_array, reconstructed_array, method="dtw")
+						reconstructed_df.loc[idx,f"{metric}_dtw"] = compare_distributions(original_array, reconstructed_array, method="dtw")
 						if len(original_array) == len(reconstructed_array):
-							reconstructed_row[f"{metric}_euclidean"] = compare_distributions(original_array, reconstructed_array, method="euclidean")
-						reconstructed_row[f"{metric}_wasserstein"] = compare_distributions(original_array, reconstructed_array, method="wasserstein")
+							reconstructed_df.loc[idx,f"{metric}_euclidean"] = compare_distributions(original_array, reconstructed_array, method="euclidean")
+						reconstructed_df.loc[idx,f"{metric}_wasserstein"] = compare_distributions(original_array, reconstructed_array, method="wasserstein")
 					elif metric == "relative_prominences":
 						avg_diff, total_diff, wasserstein = compare_prominences_distribution(original_array, reconstructed_array)
-						reconstructed_row[f"{metric}_avg_diff"] = avg_diff
-						reconstructed_row[f"{metric}_total_diff"] = total_diff
-						reconstructed_row[f"{metric}_wasserstein"] = wasserstein
+						reconstructed_df.loc[idx,f"{metric}_avg_diff"] = avg_diff
+						reconstructed_df.loc[idx,f"{metric}_total_diff"] = total_diff
+						reconstructed_df.loc[idx,f"{metric}_wasserstein"] = wasserstein
 				else:
 					try:
-						reconstructed_row[f"{metric}_diff"] = abs(float(original_df[metric].iloc[0]) - float(reconstructed_row[metric]))
+						reconstructed_df.loc[idx,f"{metric}_diff"] = abs(float(original_df[metric].iloc[0]) - float(reconstructed_row[metric]))
 					except Exception as e:
 						console.print(f"[red]Error computing difference for metric '{metric}': {e}[/red]")
-						reconstructed_row[f"{metric}_diff"] = np.nan
+						reconstructed_df.loc[idx,f"{metric}_diff"] = np.nan
 	return reconstructed_df
 
 def preprocess_signal_metrics(results_df: pd.DataFrame, ranking_config: dict,  ignore_low_variance: bool, epsilon_threshold: float = 1e-6) -> tuple:
@@ -472,84 +476,84 @@ def preprocess_signal_metrics(results_df: pd.DataFrame, ranking_config: dict,  i
 ## WAVELET NORMALIZATION & Z-SCORING FUNCTIONS
 def normalize_and_zscore(df: pd.DataFrame, metric_list: list,  ranking_config: dict, prefix: str = "",
 ) -> tuple:
-    """
-    Normalizes and Z-scores the provided metrics in the DataFrame. It uses a RobustScaler to handle outliers and MinMaxScaler for normalization. The function also logs normalization details in the ranking configuration if provided. It skips normalization for metrics with errors and logs the details in the ranking configuration.
+	"""
+	Normalizes and Z-scores the provided metrics in the DataFrame. It uses a RobustScaler to handle outliers and MinMaxScaler for normalization. The function also logs normalization details in the ranking configuration if provided. It skips normalization for metrics with errors and logs the details in the ranking configuration.
 
-    Parameters:
-    ----------
-    df : pd.DataFrame
-        DataFrame with raw metrics.
-    metric_list : list
-        List of metrics to normalize.
-    lower_is_better_metrics : list
-        List of metrics where lower values are better (to be inverted).
-    prefix : str, optional
-        Prefix for column names (e.g., "combined_" for merged datasets).
-    ranking_config : dict, optional
-        Dictionary to log normalization details.
+	Parameters:
+	----------
+	df : pd.DataFrame
+		DataFrame with raw metrics.
+	metric_list : list
+		List of metrics to normalize.
+	lower_is_better_metrics : list
+		List of metrics where lower values are better (to be inverted).
+	prefix : str, optional
+		Prefix for column names (e.g., "combined_" for merged datasets).
+	ranking_config : dict, optional
+		Dictionary to log normalization details.
 
-    Returns:
-    --------
+	Returns:
+	--------
 	tuple: pd.DataFrame, dict
-    pd.DataFrame
+	pd.DataFrame
 		DataFrame with normalized and Z-scored metrics.
 	dict
 		Updated ranking configuration with normalization details.
-    """
+	"""
 
-    scaler_robust = RobustScaler()
-    scaler_minmax = MinMaxScaler(feature_range=(0, 1))
+	scaler_robust = RobustScaler()
+	scaler_minmax = MinMaxScaler(feature_range=(0, 1))
 
-    for metric in metric_list:
-        norm_col = f"{prefix}{metric}_normalized"
-        zscore_col = f"{prefix}{metric}_zscore"
+	for metric in metric_list:
+		norm_col = f"{prefix}{metric}_normalized"
+		zscore_col = f"{prefix}{metric}_zscore"
 
-        try:
-            # Robust Scaling to handle outliers
-            robust_scaled_values = scaler_robust.fit_transform(df[[metric]]).flatten()
-            minmax_scaled_values = scaler_minmax.fit_transform(robust_scaled_values.reshape(-1, 1)).flatten()
+		try:
+			# Robust Scaling to handle outliers
+			robust_scaled_values = scaler_robust.fit_transform(df[[metric]]).flatten()
+			minmax_scaled_values = scaler_minmax.fit_transform(robust_scaled_values.reshape(-1, 1)).flatten()
 
-            # Apply normalization and inversion for "lower is better" metrics
-            if metric in LOWER_IS_BETTER_METRICS:
-                if df[metric].max() == 0 or pd.isna(df[metric].max()):
-                    df[norm_col] = 0  # Avoid division by zero
-                else:
-                    df[norm_col] = 1 - minmax_scaled_values  # Invert scaling
-            else:
-                df[norm_col] = minmax_scaled_values  # Normal MinMax scaling
+			# Apply normalization and inversion for "lower is better" metrics
+			if metric in LOWER_IS_BETTER_METRICS:
+				if df[metric].max() == 0 or pd.isna(df[metric].max()):
+					df[norm_col] = 0  # Avoid division by zero
+				else:
+					df[norm_col] = 1 - minmax_scaled_values  # Invert scaling
+			else:
+				df[norm_col] = minmax_scaled_values  # Normal MinMax scaling
 
-            # Compute Z-score (handle zero variance)
-            std_dev = df[norm_col].std()
-            if std_dev > 0:
-                df[zscore_col] = (df[norm_col] - df[norm_col].mean()) / std_dev
-            else:
-                df[zscore_col] = np.nan  # Avoid division by zero errors
+			# Compute Z-score (handle zero variance)
+			std_dev = df[norm_col].std()
+			if std_dev > 0:
+				df[zscore_col] = (df[norm_col] - df[norm_col].mean()) / std_dev
+			else:
+				df[zscore_col] = np.nan  # Avoid division by zero errors
 
-            # Log normalization details if ranking_config is provided
-            if ranking_config is not None:
-                for metric_config in ranking_config["metrics"]:
-                    if metric_config["metric"] == metric:
-                        metric_config["was_normalized"] = True
-                        metric_config["was_zscored"] = True
-                        metric_config["was_inverted"] = metric in LOWER_IS_BETTER_METRICS
-                        break  # Stop after updating the correct metric
+			# Log normalization details if ranking_config is provided
+			if ranking_config is not None:
+				for metric_config in ranking_config["metrics"]:
+					if metric_config["metric"] == metric:
+						metric_config["was_normalized"] = True
+						metric_config["was_zscored"] = True
+						metric_config["was_inverted"] = metric in LOWER_IS_BETTER_METRICS
+						break  # Stop after updating the correct metric
 
-        except ValueError as e:
-            console.print(f"[red]Skipping normalization for {metric}: {e}[/red]")
-            df[norm_col] = np.nan  # Assign NaN for debugging
-            df[zscore_col] = np.nan  # Assign NaN for debugging
+		except ValueError as e:
+			console.print(f"[red]Skipping normalization for {metric}: {e}[/red]")
+			df[norm_col] = np.nan  # Assign NaN for debugging
+			df[zscore_col] = np.nan  # Assign NaN for debugging
 
-            # Log error in ranking_config if provided
-            if ranking_config is not None:
-                for metric_config in ranking_config["metrics"]:
-                    if metric_config["metric"] == metric:
-                        metric_config["ignore_metric"] = True
-                        metric_config["removal_reason"] = "Normalization Error"
-                        break
+			# Log error in ranking_config if provided
+			if ranking_config is not None:
+				for metric_config in ranking_config["metrics"]:
+					if metric_config["metric"] == metric:
+						metric_config["ignore_metric"] = True
+						metric_config["removal_reason"] = "Normalization Error"
+						break
 
-    return df, ranking_config
+	return df, ranking_config
 
-def calculate_weighted_scores_by_metric_type(df: pd.DataFrame, metric_weights: dict, metric_type: str) -> tuple:
+def calculate_weighted_scores_by_metric_type(df: pd.DataFrame, metric_weights: dict, metric_type: str, prefix: str = "") -> tuple:
 	"""
 	This function weights scores for each metric based on the provided weights. It computes both weighted and summed scores for each metric type. It first computes the weighted scores for each metric by multiplying the metric value by the corresponding weight. It then sums the weighted scores across all metrics to obtain the total weighted score for each row. It also computes the simple summation score by summing the raw metric values across all metrics. The function then ranks the results based on the weighted scores and returns the ranked DataFrame.
 
@@ -561,6 +565,8 @@ def calculate_weighted_scores_by_metric_type(df: pd.DataFrame, metric_weights: d
 		Configuration dictionary containing metric weights.
 	metric_type : str
 		Type of metric being weighted (e.g., "signal" or "reconstruction").
+	prefix : str, optional
+		Prefix for column names (e.g., "combined_" for merged datasets).
 	
 	Returns:
 	--------
@@ -570,26 +576,35 @@ def calculate_weighted_scores_by_metric_type(df: pd.DataFrame, metric_weights: d
 		columns : list
 			List of columns used for comparison.
 	"""
-	total_scores_weighted = []
-	for _, row in df.iterrows():
-		weighted_scores = []
-		for metric, weight in metric_weights.items():
-			metric_columns = [col for col in df.columns if col == metric + "_normalized"]
-			if metric_columns:
-				metric_score = row[metric_columns].mean()  # Average across related normalized metrics
-				weighted_scores.append(weight * metric_score)
+	# Compute weighted scores
+    df[f"{prefix}{metric_type}_normalized_weighted_score"] = df.apply(
+        lambda row: sum(
+            weight * row[f"{prefix}{metric}_normalized"]
+            for metric, weight in metric_weights.items()
+            if f"{prefix}{metric}_normalized" in df.columns
+        ),
+        axis=1
+    )
 
-		total_scores_weighted.append(sum(weighted_scores))
+    # Rank based on weighted scores
+    ranked_comparison_df = df.sort_values(
+        by=f"{prefix}{metric_type}_normalized_weighted_score",
+        ascending=False
+    ).reset_index(drop=True)
+    ranked_comparison_df[f"{prefix}{metric_type}_normalized_weighted_rank"] = ranked_comparison_df.index + 1
 
-	df[f"{metric_type}_normalized_weighted_score"] = total_scores_weighted
-	ranked_comparison_df = df.sort_values(by=f"{metric_type}_normalized_weighted_score", ascending=False).reset_index(drop=True)
-	ranked_comparison_df[f"{metric_type}_normalized_weighted_rank"] = ranked_comparison_df.index + 1  # Rank by weighted method
-	# Compute **simple summation reconstruction score**
-	columns = list(metric_weights.keys())
-	ranked_comparison_df[f"{metric_type}_normalized_summed_score"] = df[columns].sum(axis=1)
-	ranked_comparison_df = ranked_comparison_df.sort_values(by=f"{metric_type}_normalized_summed_score", ascending=False).reset_index(drop=True)
-	ranked_comparison_df[f"{metric_type}_normalized_summed_rank"] = ranked_comparison_df.index + 1  # Rank by summed method
-	return ranked_comparison_df, columns
+    # Compute summed scores across all metrics
+    columns = [f"{prefix}{metric}_normalized" for metric in metric_weights.keys() if f"{prefix}{metric}_normalized" in df.columns]
+    ranked_comparison_df[f"{prefix}{metric_type}_normalized_summed_score"] = ranked_comparison_df[columns].sum(axis=1)
+
+    # Rank based on summed score
+    ranked_comparison_df = ranked_comparison_df.sort_values(
+        by=f"{prefix}{metric_type}_normalized_summed_score",
+        ascending=False
+    ).reset_index(drop=True)
+    ranked_comparison_df[f"{prefix}{metric_type}_normalized_summed_rank"] = ranked_comparison_df.index + 1
+
+    return ranked_comparison_df, columns
 
 def normalize_weights_dynamically(metrics: list, weights: dict, results_df: pd.DataFrame, ranking_config: dict, threshold: float = 0.9, shared_weight_factor: float = 0.7, specific_weight_factor: float = 0.3,min_weight: float = 0.05, max_weight: float = 0.5) -> tuple:
 	"""
@@ -718,6 +733,8 @@ def normalize_weights_dynamically(metrics: list, weights: dict, results_df: pd.D
 
 def calculate_normalized_weighted_score_by_metric_type(normalized_df: pd.DataFrame, updated_metrics: list, ranking_config: dict, weights: dict, prefix: str, metric_type: str, epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05,):
 	normalized_weights, updated_ranking_config = normalize_weights_dynamically(updated_metrics, weights, normalized_df, ranking_config)
+	# Create a lookup dictionary for faster access to ignore_metric values
+	metric_lookup = {m["metric"]: m.get("ignore_metric", False) for m in updated_ranking_config["metrics"]}
 
 	# Calculate weighted penalty for missing and ignored metrics
 	normalized_df[f'{prefix}{metric_type}_missing_metrics_count'] = normalized_df.apply(
@@ -725,7 +742,7 @@ def calculate_normalized_weighted_score_by_metric_type(normalized_df: pd.DataFra
 			normalized_weights.get(metric, 0) * (1 if pd.isna(row[f"{prefix}{metric}_normalized"]) else 0.5)
 			for metric in updated_metrics
 			if f"{prefix}{metric}_normalized" in normalized_df.columns
-			and (pd.isna(row[f"{prefix}{metric}_normalized"]) or updated_ranking_config["metrics"][updated_metrics.index(metric + "_normalized")]["ignore_metric"])
+			and (pd.isna(row[f"{prefix}{metric}_normalized"]) or metric_lookup.get(metric.replace("_normalized", ""), False))
 		),
 		axis=1
 	)
@@ -735,22 +752,22 @@ def calculate_normalized_weighted_score_by_metric_type(normalized_df: pd.DataFra
 	normalized_df[f"{prefix}{metric_type}_dynamically_normalized_weighted_score"] = normalized_df.apply(
 		lambda row: (
 			sum(
-				normalized_weights[metric] * row[f"{prefix}{metric}_normalized"]
+				normalized_weights[metric] * row[f"{prefix}{metric}"]
 				for metric in updated_metrics
-				if pd.notna(row[f"{prefix}{metric}_normalized"])
-			) / max(sum(normalized_weights[metric] for metric in updated_metrics if pd.notna(row[f"{prefix}{metric}_normalized"])), epsilon_threshold)
-			- penalty_weight * row[f"{prefix}missing_metrics_count"]  # Use precomputed penalty
+				if pd.notna(row[f"{prefix}{metric}"])
+			) / max(sum(normalized_weights[metric] for metric in updated_metrics if pd.notna(row[f"{prefix}{metric}"])), epsilon_threshold)
+			- penalty_weight * row[f"{prefix}{metric_type}_missing_metrics_count"]  # Use precomputed penalty
 		),
 		axis=1
 	)
-
+	zscore_metrics = [metric.split("_normalized")[0] for metric in updated_metrics]
 	normalized_df[f"{prefix}{metric_type}_dynamically_normalized_zscore_weighted_score"] = normalized_df.apply(
 		lambda row: (
 			sum(
-				normalized_weights[metric] * row[f"{prefix}{metric}_zscore"]
-				for metric in updated_metrics
+				normalized_weights[metric + "_normalized"] * row[f"{prefix}{metric}_zscore"]
+				for metric in zscore_metrics
 				if pd.notna(row[f"{prefix}{metric}_zscore"])
-			) / max(sum(normalized_weights[metric] for metric in updated_metrics if pd.notna(row[f"{prefix}{metric}_zscore"])), epsilon_threshold)
+			) / max(sum(normalized_weights[metric + "_normalized"] for metric in zscore_metrics if pd.notna(row[f"{prefix}{metric}_zscore"])), epsilon_threshold)
 		),
 		axis=1
 	)
@@ -758,9 +775,9 @@ def calculate_normalized_weighted_score_by_metric_type(normalized_df: pd.DataFra
 	# Compute summed normalized score
 	normalized_df[f"{prefix}{metric_type}_normalized_summed_score"] = normalized_df.apply(
 		lambda row: sum(
-			row[f"{prefix}{metric}_normalized"]
+			row[f"{prefix}{metric}"]
 			for metric in updated_metrics
-			if pd.notna(row[f"{prefix}{metric}_normalized"])
+			if pd.notna(row[f"{prefix}{metric}"])
 		),
 		axis=1
 	)
@@ -800,29 +817,329 @@ def calculate_normalized_weighted_score_by_metric_type(normalized_df: pd.DataFra
 
 	return ranked_results, updated_ranking_config
 
-def redo_determine_best_wavelet_representation(
-	results_df: pd.DataFrame, wavelet_type: str, signal_type: str, original_signal_metrics_df: pd.DataFrame, is_combined: bool = False, epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05, percentage_of_results: float = 0.1, ignore_low_variance: bool = False
+def update_ranking_config(ranked_results: pd.DataFrame, ranking_config: dict, prefix: str = "") -> dict:
+	"""
+	Updates the ranking configuration with computed statistics for each metric.
+	This includes min, max, mean, std deviation, variance, correlation with final scores,
+	and dynamically normalized values.
+
+	Parameters:
+	----------
+	ranked_results : pd.DataFrame
+		DataFrame containing the final ranking results with weighted and normalized scores.
+	ranking_config : dict
+		Dictionary storing ranking metadata.
+	prefix : str, optional
+		Prefix for column names (e.g., "combined_" for merged datasets).
+
+	Returns:
+	--------
+	ranking_config : dict
+		Updated ranking configuration with additional statistics.
+	"""
+
+	# Iterate through all the metrics in the ranking config
+	for metric_config in ranking_config["metrics"]:
+		metric = metric_config["metric"]
+
+		if metric in ranked_results.columns:
+			# Store raw metric statistics
+			metric_config.update({
+				f"{prefix}mean": ranked_results[metric].mean(),
+				f"{prefix}std": ranked_results[metric].std(),
+				f"{prefix}max": ranked_results[metric].max(),
+				f"{prefix}min": ranked_results[metric].min(),
+			})
+
+		if f"{prefix}{metric}_normalized" in ranked_results.columns:
+			# Store normalized metric statistics
+			metric_config.update({
+				f"mean_normalized": ranked_results[f"{prefix}{metric}_normalized"].mean(),
+				f"std_normalized": ranked_results[f"{prefix}{metric}_normalized"].std(),
+				f"max_normalized": ranked_results[f"{prefix}{metric}_normalized"].max(),
+				f"min_normalized": ranked_results[f"{prefix}{metric}_normalized"].min(),
+			})
+
+	# Store overall statistics for key scores
+	for score_type in ["weighted", "summed", "dynamic"]:
+		for metric_type in ["reconstruction", "signal"]:
+			score_col = f"{prefix}{metric_type}_{score_type}_score"
+			if score_col in ranked_results.columns:
+				ranking_config[f"{metric_type}_{score_type}_max"] = ranked_results[score_col].max()
+				ranking_config[f"{metric_type}_{score_type}_min"] = ranked_results[score_col].min()
+				ranking_config[f"{metric_type}_{score_type}_mean"] = ranked_results[score_col].mean()
+				ranking_config[f"{metric_type}_{score_type}_std"] = ranked_results[score_col].std()
+
+	return ranking_config
+
+def calculate_rank_stability(df: pd.DataFrame, rank_columns: list, prefix: str, weight_factor: float = 0.5) -> pd.DataFrame:
+	"""
+	Calculate a stability metric for wavelet rankings based on multiple ranking columns. The rank columns list should be ordered from the least to most important rank.
+	
+	Parameters:
+	-----------
+	df : pd.DataFrame
+		DataFrame containing rank columns to evaluate.
+	rank_columns : list of str
+		Columns representing ranks to compare for stability.
+	prefix : str
+		Prefix for column names (e.g., "combined_" for merged datasets).
+	weight_factor : float, optional
+		Weight factor for the stability metric (default is 0.5).
+		
+	Returns:
+	--------
+	pd.DataFrame
+		DataFrame with an added 'rank_stability' column.
+	"""
+	# Compute absolute differences between ranks
+	for i, col_a in enumerate(rank_columns):
+		for col_b in rank_columns[i+1:]:
+			diff_col_name = f"{col_a}_vs_{col_b}_abs_diff"
+			df[diff_col_name] = (df[col_a] - df[col_b]).abs()
+	
+	# Calculate the standard deviation of ranks across rank columns
+	df[f'{prefix}rank_std_dev'] = df[rank_columns].std(axis=1)
+	
+	# Normalize by the maximum possible rank
+	max_rank = df[rank_columns].max().max()
+	df[f'{prefix}rank_stability'] = 1 - (df[f'{prefix}rank_std_dev'] / max_rank)
+
+	df[f'{prefix}mean_rank'] = df[rank_columns].mean(axis=1)
+    # Compute weighted mean rank (stability weighted)
+	df[f'{prefix}weighted_mean_rank'] = df[f'{prefix}mean_rank'] * (1 - weight_factor) + df[f'{prefix}rank_stability'] * weight_factor
+
+    # Compute harmonic mean of ranks (to penalize large rank variations)
+	df[f'{prefix}harmonic_mean_rank'] = len(rank_columns) / np.sum(1 / df[rank_columns], axis=1)
+
+	df = df.sort_values(by=f'{prefix}weighted_mean_rank', ascending=True).reset_index(drop=True)
+
+	df[f'{prefix}wavelet_stability_rank'] = df.index + 1
+	
+	return df
+
+def calculate_wavelet_family_scores(df: pd.DataFrame, prefix: str, rank_bins:list=[0, 10, 20, 50, 100, None],):
+	"""
+	Computes wavelet scores for either individual volumes or combined titles.
+
+	Parameters:
+	- df: DataFrame containing the wavelet data.
+	- level: 'individual' for individual volume analysis, 'combined' for title-level analysis.
+	- rank_bins: List of bin edges for rank binning.
+	- weights: Dictionary of weights for the composite score. Example:
+		{
+			'composite_score': 0.3,
+			'rank_stability': 0.25,
+			'mean_rank': 0.15,
+			'total_count': 0.1,
+			'global_proportion': 0.1,
+			'htid_proportion': 0.1
+		}
+	
+	Returns:
+	- Processed DataFrame with calculated scores and rankings.
+	"""
+	# Extract wavelet families
+	df['wavelet_family'] = df['wavelet'].str.extract(r'([a-zA-Z]+)').fillna('Unknown')
+
+	# Normalize rank and stability
+	df[f'{prefix}normalized_weighted_mean_rank'] = df[f'{prefix}weighted_mean_rank'] / df[f'{prefix}weighted_mean_rank'].max()
+	df[f'{prefix}normalized_rank_stability'] = 1 - df[f'{prefix}rank_stability']
+
+	# Define weights for rank and stability
+	alpha = 0.5  # Weight for rank
+	beta = 0.5   # Weight for stability
+
+	# Compute composite score
+	df[f'{prefix}composite_score'] = (
+		alpha * df[f'{prefix}normalized_weighted_mean_rank'] + beta * df[f'{prefix}normalized_rank_stability']
+	)
+	
+	# Assign rank bins
+	if rank_bins[-1] is None:  # Replace None with max rank
+		rank_bins[-1] = df[f'{prefix}weighted_mean_rank'].max()
+
+	df[f'{prefix}rank_bin'] = pd.cut(
+		df[f'{prefix}weighted_mean_rank'],
+		bins=rank_bins,
+		labels=[f"Top {int(bin_edge)}" if bin_edge != rank_bins[-1] else "Beyond 100" for bin_edge in rank_bins[1:]]
+	)
+	# Add rank bin summaries
+	rank_bin_summary = df.groupby(['wavelet_family', f'{prefix}rank_bin']).agg(
+		binned_count=(f'{prefix}weighted_mean_rank', 'count'),
+		binned_unique_htid=('htid', 'nunique'),  # Count of unique volumes (htid)
+		binned_mean_rank_stability=(f'{prefix}rank_stability', 'mean'),  # Mean rank stability
+		binned_std_rank_stability=(f'{prefix}rank_stability', 'std')  # Standard deviation of rank stability
+	).reset_index()
+
+	# Add proportions
+	rank_bin_summary[f'{prefix}global_proportion'] = rank_bin_summary['binned_count'] / rank_bin_summary.groupby(f'{prefix}rank_bin')['binned_count'].transform('sum')
+	rank_bin_summary[f'{prefix}htid_proportion'] = rank_bin_summary['binned_unique_htid'] / rank_bin_summary.groupby(f'{prefix}rank_bin')['binned_unique_htid'].transform('sum')
+
+	top10_bins = rank_bin_summary[rank_bin_summary[f'{prefix}rank_bin'] == 'Top 10'].sort_values(by=[f'{prefix}global_proportion', f'{prefix}htid_proportion', 'binned_mean_rank_stability', 'binned_std_rank_stability', 'binned_count', 'binned_unique_htid'], ascending=[False, False, False, True, False, False])
+
+	all_bins = rank_bin_summary.sort_values(by=[f'{prefix}global_proportion', f'{prefix}htid_proportion', 'binned_mean_rank_stability', 'binned_std_rank_stability', 'binned_count', 'binned_unique_htid'], ascending=[False, False, False, True, False, False])
+
+
+	# Aggregate metrics based on the level
+	wavelet_summary = df.groupby('wavelet_family').agg(
+		wavelet_family_mean_composite_score=(f'{prefix}composite_score', 'mean'),
+		wavelet_family_mean_rank_stability=(f'{prefix}rank_stability', 'mean'),
+		wavelet_family_std_rank_stability=(f'{prefix}rank_stability', 'std'),
+		wavelet_family_mean_rank=(f'{prefix}weighted_mean_rank', 'mean'),
+		wavelet_family_total_count=('htid', 'count')
+	).reset_index()
+
+	top10_wavelet_summary = wavelet_summary.merge(top10_bins, on='wavelet_family', how='left')
+	top10_numeric_cols = top10_wavelet_summary.select_dtypes(include="number").columns.tolist()
+	top10_wavelet_summary[top10_numeric_cols] = top10_wavelet_summary[top10_numeric_cols].fillna(0)	
+	all_wavelet_summary = wavelet_summary.merge(all_bins, on='wavelet_family', how='left')	
+	all_numeric_cols = all_wavelet_summary.select_dtypes(include="number").columns.tolist()
+	all_wavelet_summary[all_numeric_cols] = all_wavelet_summary[all_numeric_cols].fillna(0)
+
+	# Normalize all metrics
+	for col in ['wavelet_family_mean_composite_score', 'wavelet_family_mean_rank_stability', 'wavelet_family_mean_rank', 'wavelet_family_total_count', f'{prefix}global_proportion', f'{prefix}htid_proportion']:
+		top10_wavelet_summary[f'{prefix}normalized_{col}'] = top10_wavelet_summary[col] / top10_wavelet_summary[col].max() if top10_wavelet_summary[col].max() != 0 else 0
+		all_wavelet_summary[f'{prefix}normalized_{col}'] = all_wavelet_summary[col] / all_wavelet_summary[col].max() if all_wavelet_summary[col].max() != 0 else 0
+
+	# Adjust ranking: Lower values for mean rank and composite score are better, so invert them
+	top10_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_composite_score'] = 1 - top10_wavelet_summary[f'{prefix}normalized_wavelet_family_mean_composite_score']
+	top10_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_rank'] = 1 - top10_wavelet_summary[f'{prefix}normalized_wavelet_family_mean_rank']
+	all_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_composite_score'] = 1 - all_wavelet_summary[f'{prefix}normalized_wavelet_family_mean_composite_score']
+	all_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_rank'] = 1 - all_wavelet_summary[f'{prefix}normalized_wavelet_family_mean_rank']
+
+	# Compute final composite score with corrected weighting
+	top10_wavelet_summary[f'{prefix}wavelet_composite_score'] = (
+		0.3 * top10_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_composite_score'] +  # Lower is better
+		0.25 * top10_wavelet_summary[f'{prefix}normalized_wavelet_family_mean_rank_stability'] +  # Higher is better
+		0.15 * top10_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_rank'] +  # Lower is better
+		0.1 * top10_wavelet_summary[f'{prefix}normalized_wavelet_family_total_count'] +  # Higher is better
+		0.1 * top10_wavelet_summary[f'{prefix}normalized_global_proportion'] +  # Higher is better
+		0.1 * top10_wavelet_summary[f'{prefix}normalized_htid_proportion']  # Higher is better
+	)
+
+	# Compute final composite score with corrected weighting
+	all_wavelet_summary[f'{prefix}wavelet_composite_score'] = (
+		0.3 * all_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_composite_score'] +  # Lower is better
+		0.25 * all_wavelet_summary[f'{prefix}normalized_wavelet_family_mean_rank_stability'] +  # Higher is better
+		0.15 * all_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_rank'] +  # Lower is better
+		0.1 * all_wavelet_summary[f'{prefix}normalized_wavelet_family_total_count'] +  # Higher is better
+		0.1 * all_wavelet_summary[f'{prefix}normalized_global_proportion'] +  # Higher is better
+		0.1 * all_wavelet_summary[f'{prefix}normalized_htid_proportion']  # Higher is better
+	)
+
+	# Sort by final score
+	top10_wavelet_summary = top10_wavelet_summary.sort_values(by=['rank_bin', f'wavelet_composite_score'], ascending=[True, False])
+	all_wavelet_summary = all_wavelet_summary.sort_values(by=['rank_bin', f'wavelet_composite_score'], ascending=[True, False])
+
+	# Select the best wavelet
+	top10_wavelet_family = top10_wavelet_summary.iloc[0].wavelet_family
+	all_wavelet_family = all_wavelet_summary.iloc[0].wavelet_family
+
+	if top10_wavelet_family != all_wavelet_family:
+		console.print(f"Best wavelet family (Top 10): {top10_wavelet_family}", style="bright_magenta")
+		console.print(top10_wavelet_summary[['wavelet_family', f'{prefix}wavelet_composite_score', "wavelet_family_mean_rank"]], style="bright_magenta")
+		console.print(f"Best wavelet family (All): {all_wavelet_family}", style="bright_magenta")
+		console.print(all_wavelet_summary[['wavelet_family', f'{prefix}wavelet_composite_score', "wavelet_family_mean_rank"]], style="bright_magenta")
+		# Ask user which wavelet family to use
+		final_wavelet_family = console.input("Which wavelet family would you like to use? (Top 10/All): ")
+		if final_wavelet_family.lower() == 'top 10':
+			console.print(f"Selected Top 10", style="bright_green")
+			final_wavelet_summary = top10_wavelet_summary
+		else:
+			console.print(f"Selected All", style="bright_green")
+			final_wavelet_summary = all_wavelet_summary
+	else:
+		console.print(f"Best wavelet family across both Top 10 and All: {top10_wavelet_family}", style="bright_magenta")
+		final_wavelet_summary = all_wavelet_summary
+		
+
+	final_df = df.merge(final_wavelet_summary, on=['wavelet_family', f'{prefix}rank_bin'], how='left')
+	final_df = final_df.sort_values(by=[f'{prefix}weighted_mean_rank', f'{prefix}wavelet_composite_score'], ascending=[True, False])
+	final_df[f"{prefix}final_wavelet_rank"] = final_df.index + 1
+	return final_df
+
+def select_top_ranked_results(ranked_results: pd.DataFrame, prefix: str, percentage_of_results: float = 0.1) -> pd.DataFrame:
+	"""
+	Selects the top-ranked wavelet configurations dynamically based on the final score.
+	Ensures that the best-performing configurations are chosen within the top N% of results,
+	while also selecting the best configurations for each wavelet type.
+
+	Parameters:
+	----------
+	ranked_results : pd.DataFrame
+		DataFrame containing ranked results with computed scores.
+	prefix : str
+		Prefix for column names (e.g., "combined_" for merged datasets).
+	is_combined : bool
+		Whether results are combined across multiple wavelet types.
+	percentage_of_results : float, optional
+		Percentage of results to retain (default is 10%).
+
+	Returns:
+	--------
+	pd.DataFrame
+		DataFrame with the final top-ranked wavelet configurations.
+	"""
+
+	# Dynamically select the top N% of ranked results
+	num_top_results = max(1, int(len(ranked_results) * percentage_of_results))  # Ensure at least one result
+	top_ranked_results = ranked_results.head(num_top_results)
+
+	# Select top configurations by wavelet, signal type, and wavelet type
+	grouping_cols = ['wavelet_type', 'wavelet'] if len(prefix) > 0 else ['wavelet']
+	grouped = ranked_results.groupby(grouping_cols)
+
+	subset_ranked_results = grouped.apply(
+		lambda group: group.loc[group[f"{prefix}final_wavelet_rank"].idxmax()]
+	).reset_index(drop=True)
+
+	# Identify columns to drop to avoid duplicate selection
+	drop_cols = ['signal_type', 'wavelet_type', 'wavelet', 'wavelet_mode', 'wavelet_level']
+	drop_cols = [col for col in drop_cols if col in subset_ranked_results.columns and col in top_ranked_results.columns]
+
+	# Merge and deduplicate top results with best group selections
+	final_ranked_results = pd.concat([top_ranked_results, subset_ranked_results], ignore_index=True)
+	final_ranked_results = final_ranked_results.drop_duplicates(subset=drop_cols, keep='first')
+
+	# Sort final results by final score
+	final_ranked_results = final_ranked_results.sort_values(
+		by=f"{prefix}weighted_mean_rank", ascending=False
+	).reset_index(drop=True)
+
+	# Assign final ranking
+	final_ranked_results[f"{prefix}top_wavelet_rank"] = final_ranked_results.index + 1
+
+	return final_ranked_results
+
+def determine_best_wavelet_representation(
+	results_df: pd.DataFrame, signal_type: str, original_signal_metrics_df: pd.DataFrame, prefix: str = "", epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05, percentage_of_results: float = 0.1, ignore_low_variance: bool = False
 ) -> tuple:
 	# Generate ranking configuration
-	ranking_config = generate_ranking_config(is_combined, signal_type)
-	initial_preprocessed_results_df = preprocess_reconstructed_metrics(original_signal_metrics_df, results_df)
-	preprocessed_results_df, ranking_config = preprocess_signal_metrics(initial_preprocessed_results_df, ranking_config, ignore_low_variance, epsilon_threshold)
+	ranking_config = generate_ranking_config(signal_type, prefix)
 
+	if len(prefix) == 0:
+		initial_preprocessed_results_df = preprocess_reconstructed_metrics(original_signal_metrics_df, results_df)
+		preprocessed_results_df, ranking_config = preprocess_signal_metrics(initial_preprocessed_results_df, ranking_config, ignore_low_variance, epsilon_threshold)
+
+	else:
+		preprocessed_results_df, ranking_config = preprocess_signal_metrics(results_df, ranking_config, ignore_low_variance, epsilon_threshold)
+	
 	metrics = [
 		metric_config["metric"]
 		for metric_config in ranking_config["metrics"]
 		if not metric_config.get("ignore_metric", False)  # Exclude ignored metrics
-		and metric_config["metric"] + "_normalized" in preprocessed_results_df.columns  # Ensure existence in `results_df`
+		and metric_config["metric"] in preprocessed_results_df.columns  # Ensure existence in `results_df`
 	]
-	prefix="combined_" if is_combined else ""
+	
 	# Normalize and Z-score metrics
-	preprocessed_results_df, ranking_config = normalize_and_zscore(preprocessed_results_df, metrics, ranking_config, prefix)
+	normalized_results_df, ranking_config = normalize_and_zscore(preprocessed_results_df, metrics, ranking_config, prefix)
 
 	# Calculate summed normalized scores
-	preprocessed_results_df["across_all_metrics_summed_normalized_score"] = preprocessed_results_df.filter(like="_normalized").sum(axis=1)
+	normalized_results_df["across_all_metrics_summed_normalized_score"] = normalized_results_df.filter(like="_normalized").sum(axis=1)
 
 	# Calculate weighted normalized scores
-	partial_weighted_scored_df, reconstruction_columns = calculate_weighted_scores_by_metric_type(preprocessed_results_df, RECONSTRUCTION_METRIC_WEIGHTS, "reconstruction")
+	partial_weighted_scored_df, reconstruction_columns = calculate_weighted_scores_by_metric_type(normalized_results_df, RECONSTRUCTION_METRIC_WEIGHTS, "reconstruction")
 	full_weighted_scored_df, signal_columns = calculate_weighted_scores_by_metric_type(partial_weighted_scored_df, SIGNAL_METRIC_WEIGHTS, "signal")
 
 	updated_reconstruction_metrics = [
@@ -844,7 +1161,20 @@ def redo_determine_best_wavelet_representation(
 	dynamically_ranked_results, updated_ranking_config = calculate_normalized_weighted_score_by_metric_type(full_weighted_scored_df, updated_reconstruction_metrics, ranking_config, RECONSTRUCTION_METRIC_WEIGHTS, prefix, "reconstruction", epsilon_threshold, penalty_weight)
 	final_ranked_results, final_ranking_config = calculate_normalized_weighted_score_by_metric_type(dynamically_ranked_results, updated_signal_metrics, updated_ranking_config, SIGNAL_METRIC_WEIGHTS, prefix, "signal", epsilon_threshold, penalty_weight)
 
-def determine_best_wavelet_representation(
+	# Update ranking configuration with additional statistics
+	final_ranking_config = update_ranking_config(final_ranked_results, final_ranking_config, prefix)
+
+	# Calculate rank stability
+	rank_cols = [f"{prefix}reconstruction_normalized_weighted_rank", f"{prefix}reconstruction_dynamic_rank", f"{prefix}signal_normalized_weighted_rank", f"{prefix}signal_dynamic_rank"] 
+	stable_ranked_results = calculate_rank_stability(final_ranked_results, rank_cols, prefix)
+	total_ranked_results = calculate_wavelet_family_scores(stable_ranked_results, prefix)
+	
+	top_ranked_results = select_top_ranked_results(total_ranked_results, prefix, percentage_of_results)
+
+	return top_ranked_results, total_ranked_results, final_ranking_config
+	
+
+def older_determine_best_wavelet_representation(
 	results_df: pd.DataFrame, wavelet_type: str, signal_type: str, original_signal_metrics_df: pd.DataFrame, is_combined: bool = False, epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05, percentage_of_results: float = 0.1, ignore_low_variance: bool = False
 ) -> tuple:
 	"""
@@ -1187,133 +1517,9 @@ def determine_best_wavelet_representation(
 	best_config = final_ranked_results.iloc[0:1]
 	return best_config, ranked_results, final_ranked_results, overall_correlation_norm_zscore, updated_ranking_config
 
-def calculate_rank_stability(df: pd.DataFrame, rank_columns: list) -> pd.DataFrame:
-	"""
-	Calculate a stability metric for wavelet rankings based on multiple ranking columns. The rank columns list should be ordered from the least to most important rank.
-	
-	Parameters:
-	-----------
-	df : pd.DataFrame
-		DataFrame containing rank columns to evaluate.
-	rank_columns : list of str
-		Columns representing ranks to compare for stability.
-		
-	Returns:
-	--------
-	pd.DataFrame
-		DataFrame with an added 'rank_stability' column.
-	"""
-	# Compute absolute differences between ranks
-	for i, col_a in enumerate(rank_columns):
-		for col_b in rank_columns[i+1:]:
-			diff_col_name = f"{col_a}_vs_{col_b}_abs_diff"
-			df[diff_col_name] = (df[col_a] - df[col_b]).abs()
-	
-	# Calculate the standard deviation of ranks across rank columns
-	df['rank_std_dev'] = df[rank_columns].std(axis=1)
-	
-	# Normalize by the maximum possible rank
-	max_rank = df[rank_columns].max().max()
-	df['rank_stability'] = 1 - (df['rank_std_dev'] / max_rank)
-	
-	return df
 
-def compute_wavelet_scores(df: pd.DataFrame, is_combined: bool, rank_bins:list=[0, 10, 20, 50, 100, None],):
-	"""
-	Computes wavelet scores for either individual volumes or combined titles.
 
-	Parameters:
-	- df: DataFrame containing the wavelet data.
-	- level: 'individual' for individual volume analysis, 'combined' for title-level analysis.
-	- rank_bins: List of bin edges for rank binning.
-	- weights: Dictionary of weights for the composite score. Example:
-		{
-			'composite_score': 0.3,
-			'rank_stability': 0.25,
-			'mean_rank': 0.15,
-			'total_count': 0.1,
-			'global_proportion': 0.1,
-			'htid_proportion': 0.1
-		}
-	
-	Returns:
-	- Processed DataFrame with calculated scores and rankings.
-	"""
 
-	prefix = 'all_volumes_' if is_combined else 'individual_volume_'
-	
-	# Normalize rank and stability
-	df[f'{prefix}normalized_rank'] = df['combined_final_wavelet_rank'] / df['combined_final_wavelet_rank'].max()
-	df[f'{prefix}normalized_stability'] = 1 - df[f'rank_stability']
-
-	# Define weights for rank and stability
-	alpha = 0.5  # Weight for rank
-	beta = 0.5   # Weight for stability
-
-	# Compute composite score
-	df[f'{prefix}composite_score'] = (
-		alpha * df[f'{prefix}normalized_rank'] + beta * df[f'{prefix}normalized_stability']
-	)
-	
-	# Assign rank bins
-	if rank_bins[-1] is None:  # Replace None with max rank
-		rank_bins[-1] = df['combined_final_wavelet_rank'].max()
-
-	df[f'{prefix}rank_bin'] = pd.cut(
-		df['combined_final_wavelet_rank'],
-		bins=rank_bins,
-		labels=[f"Top {int(bin_edge)}" if bin_edge != rank_bins[-1] else "Beyond 100" for bin_edge in rank_bins[1:]]
-	)
-	# Add rank bin summaries
-	rank_bin_summary = df.groupby(['wavelet_family', f'{prefix}rank_bin']).agg(
-		count=('combined_final_wavelet_rank', 'count'),
-		unique_htid=('htid', 'nunique'),  # Count of unique volumes (htid)
-		binned_mean_rank_stability=(f'rank_stability', 'mean'),  # Mean rank stability
-		binned_std_rank_stability=(f'rank_stability', 'std')  # Standard deviation of rank stability
-	).reset_index()
-
-	# Add proportions
-	rank_bin_summary[f'{prefix}global_proportion'] = rank_bin_summary['count'] / rank_bin_summary.groupby(f'{prefix}rank_bin')['count'].transform('sum')
-	rank_bin_summary[f'{prefix}htid_proportion'] = rank_bin_summary['unique_htid'] / rank_bin_summary.groupby(f'{prefix}rank_bin')['unique_htid'].transform('sum')
-
-	top10_metrics = rank_bin_summary[rank_bin_summary[f'{prefix}rank_bin'] == 'Top 10'].sort_values(by=[f'{prefix}global_proportion', f'{prefix}htid_proportion', 'mean_rank_stability', 'std_rank_stability', 'count', 'unique_htid'], ascending=[False, False, False, True, False, False])
-
-	# Aggregate metrics based on the level
-	wavelet_summary = df.groupby('wavelet_family').agg(
-		mean_composite_score=(f'{prefix}composite_score', 'mean'),
-		mean_rank_stability=(f'rank_stability', 'mean'),
-		std_rank_stability=(f'rank_stability', 'std'),
-		mean_rank=('combined_final_wavelet_rank', 'mean'),
-		total_count=('htid', 'count')
-	).reset_index()
-
-	wavelet_summary = wavelet_summary.merge(top10_metrics, on='wavelet_family', how='left').fillna(0)	
-
-	# Normalize all metrics
-	for col in ['mean_composite_score', 'mean_rank_stability', 'mean_rank', 'total_count', f'{prefix}global_proportion', f'{prefix}htid_proportion']:
-		wavelet_summary[f'{prefix}normalized_{col}'] = wavelet_summary[col] / wavelet_summary[col].max()
-
-	# Compute final composite score
-	wavelet_summary[f'{prefix}wavelet_composite_score'] = (
-		0.3 * wavelet_summary[f'{prefix}normalized_mean_composite_score'] +
-		0.25 * wavelet_summary[f'{prefix}normalized_mean_rank_stability'] +
-		0.15 * wavelet_summary[f'{prefix}normalized_mean_rank'] +
-		0.1 * wavelet_summary[f'{prefix}normalized_total_count'] +
-		0.1 * wavelet_summary[f'{prefix}normalized_global_proportion'] +
-		0.1 * wavelet_summary[f'{prefix}normalized_htid_proportion']
-	)
-
-	# Sort by final score
-	wavelet_summary = wavelet_summary.sort_values(by=f'{prefix}_wavelet_composite_score', ascending=False)
-
-	# Select the best wavelet
-	top_wavelet_family = wavelet_summary.iloc[0]
-	console.print(f"Best wavelet family: {top_wavelet_family.wavelet_family}", style="bright_magenta")
-
-	final_df = df.merge(rank_bin_summary, on=['wavelet_family', f'{prefix}rank_bin'], how='left')
-	final_df[f'{prefix}top_wavelet_family'] = top_wavelet_family
-	final_df = final_df.sort_values(by=[f'{prefix}composite_score'], ascending=[False])
-	return final_df
 
 def generate_finalized_wavelets():
 	data_directory_path = get_data_directory_path()
