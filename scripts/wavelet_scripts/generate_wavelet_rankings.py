@@ -569,8 +569,6 @@ def calculate_normalized_weighted_scores_by_metric_type(df: pd.DataFrame, metric
 			DataFrame containing the comparison results and rankings.
 		columns : list
 			List of columns used for comparison.
-		correlation_rank : float
-			Correlation between weighted and summed ranks.
 	"""
 	if not metric_weights:  # Ensure metrics exist
 		console.print(f"[yellow]No metrics provided for {metric_type}. Skipping calculations.[/yellow]")
@@ -621,17 +619,7 @@ def calculate_normalized_weighted_scores_by_metric_type(df: pd.DataFrame, metric
 	).reset_index(drop=True)
 	ranked_comparison_df[f"{prefix}{metric_type}_normalized_summed_rank"] = ranked_comparison_df.index + 1
 
-	# Compute correlation safely
-	rank_columns = [
-		f"{prefix}{metric_type}_normalized_weighted_rank",
-		f"{prefix}{metric_type}_normalized_summed_rank"
-	]
-	if all(col in ranked_comparison_df.columns for col in rank_columns):
-		correlation_rank = ranked_comparison_df[rank_columns].corr().fillna(0).iloc[0, 1]
-	else:
-		correlation_rank = np.nan
-
-	return ranked_comparison_df, columns, correlation_rank
+	return ranked_comparison_df, columns
 
 def normalize_weights_dynamically(metrics: list, weights: dict, results_df: pd.DataFrame, ranking_config: dict, threshold: float = 0.9, shared_weight_factor: float = 0.7, specific_weight_factor: float = 0.3,min_weight: float = 0.05, max_weight: float = 0.5) -> tuple:
 	"""
@@ -839,43 +827,8 @@ def calculate_dynamically_normalized_weighted_score_by_metric_type(
 		axis=1
 	)
 
-	# Normalize the dynamically weighted scores
-	max_weighted_score = normalized_df[f"{prefix}{metric_type}_dynamically_weighted_score"].max()
-	if max_weighted_score > 0:
-		normalized_df[f"{prefix}{metric_type}_normalized_dynamically_weighted_score"] /= max_weighted_score
-	else:
-		console.print("[yellow]Max dynamically weighted score is zero! Assigning equal scores.[/yellow]")
-		normalized_df[f"{prefix}{metric_type}_normalized_dynamically_weighted_score"] = 1 / len(updated_metrics)  # Assign equal importance
-
-	# Normalize the dynamically weighted z-score scores
-	max_zscore_weighted_score = normalized_df[f"{prefix}{metric_type}_dynamically_weighted_score_zscore"].max()
-	if max_zscore_weighted_score > 0:
-		normalized_df[f"{prefix}{metric_type}_normalized_dynamically_weighted_score_zscore"] /= max_zscore_weighted_score
-	else:
-		console.print("[yellow]Max dynamically weighted z-score score is zero! Assigning equal scores.[/yellow]")
-		normalized_df[f"{prefix}{metric_type}_normalized_dynamically_weighted_score_zscore"] = 1 / len(updated_metrics)  # Assign equal importance
-
-	# Final stability-adjusted score 
-	normalized_df[f"{prefix}{metric_type}_final_normalized_dynamic_score"] = (
-	(normalized_df[f"{prefix}{metric_type}_normalized_dynamically_weighted_score"] + 
-		normalized_df[f"{prefix}{metric_type}_normalized_dynamically_weighted_score_zscore"]) / 2
-	)
-
-	# Rank results by final dynamic score
-	ranked_results = normalized_df.sort_values(
-	by=f"{prefix}{metric_type}_final_normalized_dynamic_score", ascending=False
-	).reset_index(drop=True)
-	ranked_results[f"{prefix}{metric_type}_dynamic_rank"] = ranked_results.index + 1
-
-
-	# Rank results by final dynamic score
-	ranked_results = normalized_df.sort_values(
-		by=f"{prefix}{metric_type}_dynamic_score", ascending=False
-	).reset_index(drop=True)
-	ranked_results[f"{prefix}{metric_type}_dynamic_rank"] = ranked_results.index + 1
-
 	# Compute dynamically weighted summed score
-	normalized_df[f"{prefix}{metric_type}_dynamically_normalized_weighted_summed_score"] = normalized_df.apply(
+	normalized_df[f"{prefix}{metric_type}_dynamically_weighted_summed_score"] = normalized_df.apply(
 		lambda row: sum(
 			normalized_weights.get(metric, 0) * row[f"{prefix}{metric}_normalized"]
 			for metric in updated_metrics
@@ -884,33 +837,37 @@ def calculate_dynamically_normalized_weighted_score_by_metric_type(
 		axis=1
 	)
 
-	# Normalize summed score
-	max_summed_score = normalized_df[f"{prefix}{metric_type}_dynamically_normalized_weighted_summed_score"].max()
-	if max_summed_score > 0:
-		normalized_df[f"{prefix}{metric_type}_dynamically_normalized_weighted_summed_score"] /= max_summed_score
-	else:
-		console.print("[yellow]Max summed normalized score is zero! Assigning equal scores.[/yellow]")
-		normalized_df[f"{prefix}{metric_type}_dynamically_normalized_weighted_summed_score"] = 1 / len(updated_metrics)  # Assign equal importance
+	# Normalize weighted scores
+	for col in [f"dynamically_weighted_score", f"dynamically_weighted_score_zscore", f"dynamically_weighted_summed_score"]:
+		max_score = normalized_df[f"{prefix}{metric_type}_{col}"].max()
+		if max_score > 0:
+			normalized_df[f"{prefix}{metric_type}_normalized_{col}"] /= max_score
+		else:
+			console.print(f"[yellow]Max {col} is zero! Assigning equal scores.[/yellow]")
+			normalized_df[f"{prefix}{metric_type}_normalized_{col}"] = 1 / len(updated_metrics)  # Assign equal importance
 
-		# Compute normalized diff for summed score
-	normalized_df[f"{prefix}{metric_type}_normalized_summed_diff"] = (
-		(normalized_df[f"{prefix}{metric_type}_dynamically_normalized_weighted_summed_score"] - 
-		 normalized_df[f"{prefix}{metric_type}_dynamically_normalized_weighted_score_zscore"]).abs()
-		/ (normalized_df[f"{prefix}{metric_type}_dynamically_normalized_weighted_summed_score"] + 
-		   normalized_df[f"{prefix}{metric_type}_dynamically_normalized_weighted_score_zscore"]).abs()
-	).abs()
-
-	# Final stability-adjusted summed score
-	normalized_df[f"{prefix}{metric_type}_dynamic_summed_score"] = (
-		normalized_df[f"{prefix}{metric_type}_dynamically_normalized_weighted_summed_score"]
-		- penalty_weight * normalized_df[f"{prefix}{metric_type}_normalized_summed_diff"]
+	# Compute final stability-adjusted score as the average of weighted and z-score scores
+	normalized_df[f"{prefix}{metric_type}_final_normalized_dynamic_score"] = (
+		(normalized_df[f"{prefix}{metric_type}_normalized_dynamically_weighted_score"] + 
+		normalized_df[f"{prefix}{metric_type}_normalized_dynamically_weighted_score_zscore"]) / 2
 	)
+	# Rank results by dynamically weighted score
+	ranked_results = normalized_df.sort_values(
+		by=f"{prefix}{metric_type}_normalized_dynamically_weighted_score", ascending=False
+	).reset_index(drop=True)
+	ranked_results[f"{prefix}{metric_type}_dynamic_weighted_rank"] = ranked_results.index + 1
 
-	# Rank results by dynamically weighted summed score
+	# Rank results by summed score
 	ranked_results = ranked_results.sort_values(
-		by=f"{prefix}{metric_type}_dynamic_weighted_summed_score", ascending=False
+		by=f"{prefix}{metric_type}_dynamically_normalized_weighted_summed_score", ascending=False
 	).reset_index(drop=True)
 	ranked_results[f"{prefix}{metric_type}_dynamic_summed_rank"] = ranked_results.index + 1
+	
+	# Rank results by final stability-adjusted dynamic score
+	ranked_results = ranked_results.sort_values(
+		by=f"{prefix}{metric_type}_final_normalized_dynamic_score", ascending=False
+	).reset_index(drop=True)
+	ranked_results[f"{prefix}{metric_type}_final_dynamic_rank"] = ranked_results.index + 1
 
 	return ranked_results, updated_ranking_config
 
@@ -1026,7 +983,69 @@ def calculate_rank_stability(df: pd.DataFrame, rank_columns: list, prefix: str, 
 	
 	return df
 
-def calculate_wavelet_family_scores(df: pd.DataFrame, prefix: str, rank_bins:list=[0, 10, 20, 50, 100, None],):
+def calculate_wavelet_family_stability(df: pd.DataFrame, prefix: str):
+	"""
+	Computes wavelet family-level rank stability and merges it back to individual rankings.
+
+	Parameters:
+	----------
+	df : pd.DataFrame
+		DataFrame with wavelet rankings and stability metrics.
+	prefix : str
+		Prefix for metric columns.
+
+	Returns:
+	--------
+	pd.DataFrame
+		DataFrame with both individual wavelet rankings and family-level stability scores.
+	"""
+	# Extract wavelet families
+	df['wavelet_family'] = df['wavelet'].str.extract(r'([a-zA-Z]+)').fillna('Unknown')
+
+	# Compute family-level stability based on the correct metrics
+	family_rank_stability = df.groupby('wavelet_family').agg(
+		family_mean_stability_rank=(f'{prefix}stability_rank', 'mean'),  # Use stability rank
+		family_median_stability_rank=(f'{prefix}stability_rank', 'median'),
+		family_rank_stability_std_dev=(f'{prefix}stability_rank', 'std'),
+		family_mean_rank_variability=(f'{prefix}rank_variability', 'mean'),
+		family_mean_weighted_avg_rank=(f'{prefix}weighted_average_rank', 'mean'),
+		family_rank_correlation_avg=(f'{prefix}normalized_rank_correlation', 'mean'),
+		family_total_count=('htid', 'count')
+	).reset_index()
+
+	# Normalize relevant metrics (Lower rank is better, higher stability is better)
+	for col in [
+		'family_mean_stability_rank', 'family_median_stability_rank',
+		'family_rank_stability_std_dev', 'family_mean_rank_variability',
+		'family_mean_weighted_avg_rank', 'family_rank_correlation_avg'
+	]:
+		max_value = family_rank_stability[col].max()
+		if max_value > 0:
+			family_rank_stability[f'{prefix}normalized_{col}'] = family_rank_stability[col] / max_value
+		else:
+			console.print(f"[yellow]Max {col} is zero! Assigning equal scores.[/yellow]")
+			family_rank_stability[f'{prefix}normalized_{col}'] = 1 / len(family_rank_stability)  # Assign equal importance
+
+	# Compute final family stability score
+	family_rank_stability[f'{prefix}final_family_stability_score'] = (
+		0.4 * (1 - family_rank_stability[f'{prefix}normalized_family_mean_stability_rank']) +  # Lower is better
+		0.3 * (1 - family_rank_stability[f'{prefix}normalized_family_median_stability_rank']) +  # Lower is better
+		0.2 * family_rank_stability[f'{prefix}normalized_family_rank_correlation_avg'] +  # Higher is better
+		0.1 * (1 - family_rank_stability[f'{prefix}normalized_family_rank_stability_std_dev'])  # Lower is better
+	)
+
+	# Rank families based on final stability score
+	family_rank_stability = family_rank_stability.sort_values(
+		by=f'{prefix}final_family_stability_score', ascending=False
+	).reset_index(drop=True)
+	family_rank_stability[f'{prefix}final_family_stability_rank'] = family_rank_stability.index + 1
+
+	# **Merge Back with Original Data**
+	df = df.merge(family_rank_stability, on='wavelet_family', how='left')
+
+	return df
+
+def older_calculate_wavelet_family_scores(df: pd.DataFrame, prefix: str, rank_bins:list=[0, 10, 20, 50, 100, None],):
 	"""
 	Computes wavelet scores for either individual volumes or combined titles.
 
@@ -1247,8 +1266,8 @@ def determine_best_wavelet_representation(
 	normalized_results_df["across_all_metrics_summed_normalized_score"] = normalized_results_df.filter(like="_normalized").sum(axis=1)
 
 	# Calculate weighted normalized scores
-	partial_weighted_scored_df, reconstruction_columns, reconstruction_rank_correlation = calculate_normalized_weighted_scores_by_metric_type(normalized_results_df, RECONSTRUCTION_METRIC_WEIGHTS, "reconstruction")
-	full_weighted_scored_df, signal_columns, signal_rank_correlation = calculate_normalized_weighted_scores_by_metric_type(partial_weighted_scored_df, SIGNAL_METRIC_WEIGHTS, "signal")
+	partial_weighted_scored_df, reconstruction_columns = calculate_normalized_weighted_scores_by_metric_type(normalized_results_df, RECONSTRUCTION_METRIC_WEIGHTS, "reconstruction")
+	full_weighted_scored_df, signal_columns = calculate_normalized_weighted_scores_by_metric_type(partial_weighted_scored_df, SIGNAL_METRIC_WEIGHTS, "signal")
 
 	updated_reconstruction_metrics = [
 		metric_config["metric"] + "_normalized"
@@ -1273,9 +1292,32 @@ def determine_best_wavelet_representation(
 	final_ranking_config = update_ranking_config(final_ranked_results, final_ranking_config, prefix)
 
 
-	# Calculate rank stability
-	rank_cols = [f"{prefix}reconstruction_normalized_weighted_rank", f"{prefix}reconstruction_dynamic_rank", f"{prefix}signal_normalized_weighted_rank", f"{prefix}signal_dynamic_rank"] 
-	stable_ranked_results = calculate_rank_stability(final_ranked_results, rank_cols, prefix)
+	# **Compute Correlation Between Different Ranks**
+	rank_cols = [
+		f"{prefix}reconstruction_normalized_weighted_rank", f"{prefix}reconstruction_dynamic_weighted_rank", 
+		f"{prefix}reconstruction_dynamic_summed_rank", f"{prefix}reconstruction_final_dynamic_rank", 
+		f"{prefix}signal_normalized_weighted_rank", f"{prefix}signal_dynamic_weighted_rank",
+		f"{prefix}signal_dynamic_summed_rank", f"{prefix}signal_final_dynamic_rank"
+	]
+	
+	# Compute correlation matrix
+	rank_corr_matrix = final_ranked_results[rank_cols].corr().fillna(0)
+
+	# **Select Ranks for Stability Assessment Based on Correlation**
+	selected_rank_cols = [
+		f"{prefix}reconstruction_normalized_weighted_rank", f"{prefix}reconstruction_dynamic_weighted_rank",
+		f"{prefix}signal_normalized_weighted_rank", f"{prefix}signal_dynamic_weighted_rank"
+	]
+
+	# Add other rank columns if they are highly correlated (threshold ~0.85+)
+	for col in [f"{prefix}reconstruction_dynamic_summed_rank", f"{prefix}reconstruction_final_dynamic_rank",
+				f"{prefix}signal_dynamic_summed_rank", f"{prefix}signal_final_dynamic_rank"]:
+		if any(rank_corr_matrix[col][selected_col] >= 0.85 for selected_col in selected_rank_cols):
+			selected_rank_cols.append(col)
+
+	# **Calculate Rank Stability Using Selected Columns**
+	stable_ranked_results = calculate_rank_stability(final_ranked_results, selected_rank_cols, prefix)
+
 	total_ranked_results = calculate_wavelet_family_scores(stable_ranked_results, prefix)
 	
 	top_ranked_results = select_top_ranked_results(total_ranked_results, prefix, percentage_of_results)
