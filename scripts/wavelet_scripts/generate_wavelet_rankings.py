@@ -431,7 +431,7 @@ def preprocess_signal_metrics(results_df: pd.DataFrame, ranking_config: dict,  i
 			# Adjust weights instead of outright removal
 			if std_dev <= epsilon_threshold:
 				console.print(
-					f"[yellow]Low variance for '{metric}' (std: {std_dev:.6f}, mean: {avg_value:.6f}). Adjusting weight.[/yellow]"
+					f"[yellow]Low variance for '{metric}' (std: {std_dev:.6f}, mean: {avg_value:.6f}).[/yellow]"
 				)
 				metric_config["ignore_metric"] = False
 				metric_config["removal_reason"] = f"Low variance (std: {std_dev:.6f}, mean: {avg_value:.6f})"
@@ -580,9 +580,9 @@ def calculate_normalized_weighted_scores_by_metric_type(df: pd.DataFrame, metric
 	# Compute weighted scores
 	df[f"{prefix}{metric_type}_weighted_score"] = df.progress_apply(
 		lambda row: sum(
-			weight * row[f"{prefix}{metric}_normalized"]
+			weight * row[f"{prefix}{metric}"]
 			for metric, weight in metric_weights.items()
-			if f"{prefix}{metric}_normalized" in df.columns and pd.notna(row[f"{prefix}{metric}_normalized"])
+			if f"{prefix}{metric}" in df.columns and pd.notna(row[f"{prefix}{metric}"])
 		),
 		axis=1
 	)
@@ -602,7 +602,7 @@ def calculate_normalized_weighted_scores_by_metric_type(df: pd.DataFrame, metric
 	ranked_comparison_df[f"{prefix}{metric_type}_normalized_weighted_rank"] = ranked_comparison_df.index + 1
 
 	# Compute summed scores across all metrics
-	columns = [f"{prefix}{metric}_normalized" for metric in metric_weights.keys() if f"{prefix}{metric}_normalized" in df.columns]
+	columns = [f"{prefix}{metric}" for metric in metric_weights.keys() if f"{prefix}{metric}" in df.columns]
 	ranked_comparison_df[f"{prefix}{metric_type}_summed_score"] = ranked_comparison_df[columns].sum(axis=1)
 
 	# Normalize summed scores
@@ -672,7 +672,6 @@ def normalize_weights_dynamically(metrics: list, weights: dict, results_df: pd.D
 		metric: min(weights.get(metric, min_weight) * max(metric_variances[metric] * metric_presence[metric], min_weight * 10), max_weight)
 		for metric in metrics
 	}
-
 	# Step 4: Normalize Dynamic Adjustments
 	total_adjustment = sum(dynamic_adjustments.values())
 	if total_adjustment == 0:
@@ -791,10 +790,10 @@ def calculate_dynamically_normalized_weighted_score_by_metric_type(
 	# Compute weighted penalty for missing and ignored metrics
 	normalized_df[f'{prefix}{metric_type}_missing_metrics_count'] = normalized_df.apply(
 		lambda row: sum(
-			normalized_weights.get(metric, 0) * (1 if pd.isna(row[f"{prefix}{metric}_normalized"]) else 0.5)
+			normalized_weights.get(metric, 0) * (1 if pd.isna(row[f"{prefix}{metric}"]) else 0.5)
 			for metric in updated_metrics
-			if f"{prefix}{metric}_normalized" in normalized_df.columns
-			and (pd.isna(row[f"{prefix}{metric}_normalized"]) or metric_lookup.get(metric.replace("_normalized", ""), False))
+			if f"{prefix}{metric}" in normalized_df.columns
+			and (pd.isna(row[f"{prefix}{metric}"]) or metric_lookup.get(metric.replace("_normalized", ""), False))
 		),
 		axis=1
 	)
@@ -805,10 +804,10 @@ def calculate_dynamically_normalized_weighted_score_by_metric_type(
 	normalized_df[f"{prefix}{metric_type}_dynamically_weighted_score"] = normalized_df.progress_apply(
 		lambda row: (
 			sum(
-				normalized_weights[metric] * row[f"{prefix}{metric}_normalized"]
+				normalized_weights[metric] * row[f"{prefix}{metric}"]
 				for metric in updated_metrics
-				if pd.notna(row[f"{prefix}{metric}_normalized"])
-			) / max(sum(normalized_weights[metric] for metric in updated_metrics if pd.notna(row[f"{prefix}{metric}_normalized"])), epsilon_threshold)
+				if pd.notna(row[f"{prefix}{metric}"])
+			) / max(sum(normalized_weights[metric] for metric in updated_metrics if pd.notna(row[f"{prefix}{metric}"])), epsilon_threshold)
 			- penalty_weight * row[f"{prefix}{metric_type}_missing_metrics_count"]  # Use precomputed penalty
 		),
 		axis=1
@@ -830,9 +829,9 @@ def calculate_dynamically_normalized_weighted_score_by_metric_type(
 	# Compute dynamically weighted summed score
 	normalized_df[f"{prefix}{metric_type}_dynamically_weighted_summed_score"] = normalized_df.apply(
 		lambda row: sum(
-			normalized_weights.get(metric, 0) * row[f"{prefix}{metric}_normalized"]
+			normalized_weights.get(metric, 0) * row[f"{prefix}{metric}"]
 			for metric in updated_metrics
-			if f"{prefix}{metric}_normalized" in normalized_df.columns and pd.notna(row[f"{prefix}{metric}_normalized"])
+			if f"{prefix}{metric}" in normalized_df.columns and pd.notna(row[f"{prefix}{metric}"])
 		),
 		axis=1
 	)
@@ -841,7 +840,7 @@ def calculate_dynamically_normalized_weighted_score_by_metric_type(
 	for col in [f"dynamically_weighted_score", f"dynamically_weighted_score_zscore", f"dynamically_weighted_summed_score"]:
 		max_score = normalized_df[f"{prefix}{metric_type}_{col}"].max()
 		if max_score > 0:
-			normalized_df[f"{prefix}{metric_type}_normalized_{col}"] /= max_score
+			normalized_df[f"{prefix}{metric_type}_normalized_{col}"] = normalized_df[f"{prefix}{metric_type}_{col}"] / max_score
 		else:
 			console.print(f"[yellow]Max {col} is zero! Assigning equal scores.[/yellow]")
 			normalized_df[f"{prefix}{metric_type}_normalized_{col}"] = 1 / len(updated_metrics)  # Assign equal importance
@@ -859,7 +858,7 @@ def calculate_dynamically_normalized_weighted_score_by_metric_type(
 
 	# Rank results by summed score
 	ranked_results = ranked_results.sort_values(
-		by=f"{prefix}{metric_type}_dynamically_normalized_weighted_summed_score", ascending=False
+		by=f"{prefix}{metric_type}_normalized_dynamically_weighted_summed_score", ascending=False
 	).reset_index(drop=True)
 	ranked_results[f"{prefix}{metric_type}_dynamic_summed_rank"] = ranked_results.index + 1
 	
@@ -1042,151 +1041,13 @@ def calculate_wavelet_family_stability(df: pd.DataFrame, prefix: str):
 
 	# **Merge Back with Original Data**
 	df = df.merge(family_rank_stability, on='wavelet_family', how='left')
-
+	# Compute family-informed rank with lower weight on family stability
+	df[f'{prefix}family_informed_rank'] = (
+		0.75 * df[f'{prefix}stability_rank'] + 0.25 * df[f'{prefix}final_family_stability_rank']
+	)
 	return df
 
-def older_calculate_wavelet_family_scores(df: pd.DataFrame, prefix: str, rank_bins:list=[0, 10, 20, 50, 100, None],):
-	"""
-	Computes wavelet scores for either individual volumes or combined titles.
-
-	Parameters:
-	- df: DataFrame containing the wavelet data.
-	- level: 'individual' for individual volume analysis, 'combined' for title-level analysis.
-	- rank_bins: List of bin edges for rank binning.
-	- weights: Dictionary of weights for the composite score. Example:
-		{
-			'composite_score': 0.3,
-			'rank_stability': 0.25,
-			'mean_rank': 0.15,
-			'total_count': 0.1,
-			'global_proportion': 0.1,
-			'htid_proportion': 0.1
-		}
-	
-	Returns:
-	- Processed DataFrame with calculated scores and rankings.
-	"""
-	# Extract wavelet families
-	df['wavelet_family'] = df['wavelet'].str.extract(r'([a-zA-Z]+)').fillna('Unknown')
-
-	# Normalize rank and stability
-	df[f'{prefix}normalized_weighted_mean_rank'] = df[f'{prefix}weighted_mean_rank'] / df[f'{prefix}weighted_mean_rank'].max()
-	df[f'{prefix}normalized_rank_stability'] = 1 - df[f'{prefix}rank_stability']
-
-	# Define weights for rank and stability
-	alpha = 0.5  # Weight for rank
-	beta = 0.5   # Weight for stability
-
-	# Compute composite score
-	df[f'{prefix}composite_score'] = (
-		alpha * df[f'{prefix}normalized_weighted_mean_rank'] + beta * df[f'{prefix}normalized_rank_stability']
-	)
-	
-	# Assign rank bins
-	if rank_bins[-1] is None:  # Replace None with max rank
-		rank_bins[-1] = df[f'{prefix}weighted_mean_rank'].max()
-
-	df[f'{prefix}rank_bin'] = pd.cut(
-		df[f'{prefix}weighted_mean_rank'],
-		bins=rank_bins,
-		labels=[f"Top {int(bin_edge)}" if bin_edge != rank_bins[-1] else "Beyond 100" for bin_edge in rank_bins[1:]]
-	)
-	# Add rank bin summaries
-	rank_bin_summary = df.groupby(['wavelet_family', f'{prefix}rank_bin']).agg(
-		binned_count=(f'{prefix}weighted_mean_rank', 'count'),
-		binned_unique_htid=('htid', 'nunique'),  # Count of unique volumes (htid)
-		binned_mean_rank_stability=(f'{prefix}rank_stability', 'mean'),  # Mean rank stability
-		binned_std_rank_stability=(f'{prefix}rank_stability', 'std')  # Standard deviation of rank stability
-	).reset_index()
-
-	# Add proportions
-	rank_bin_summary[f'{prefix}global_proportion'] = rank_bin_summary['binned_count'] / rank_bin_summary.groupby(f'{prefix}rank_bin')['binned_count'].transform('sum')
-	rank_bin_summary[f'{prefix}htid_proportion'] = rank_bin_summary['binned_unique_htid'] / rank_bin_summary.groupby(f'{prefix}rank_bin')['binned_unique_htid'].transform('sum')
-
-	top10_bins = rank_bin_summary[rank_bin_summary[f'{prefix}rank_bin'] == 'Top 10'].sort_values(by=[f'{prefix}global_proportion', f'{prefix}htid_proportion', 'binned_mean_rank_stability', 'binned_std_rank_stability', 'binned_count', 'binned_unique_htid'], ascending=[False, False, False, True, False, False])
-
-	all_bins = rank_bin_summary.sort_values(by=[f'{prefix}global_proportion', f'{prefix}htid_proportion', 'binned_mean_rank_stability', 'binned_std_rank_stability', 'binned_count', 'binned_unique_htid'], ascending=[False, False, False, True, False, False])
-
-
-	# Aggregate metrics based on the level
-	wavelet_summary = df.groupby('wavelet_family').agg(
-		wavelet_family_mean_composite_score=(f'{prefix}composite_score', 'mean'),
-		wavelet_family_mean_rank_stability=(f'{prefix}rank_stability', 'mean'),
-		wavelet_family_std_rank_stability=(f'{prefix}rank_stability', 'std'),
-		wavelet_family_mean_rank=(f'{prefix}weighted_mean_rank', 'mean'),
-		wavelet_family_total_count=('htid', 'count')
-	).reset_index()
-
-	top10_wavelet_summary = wavelet_summary.merge(top10_bins, on='wavelet_family', how='left')
-	top10_numeric_cols = top10_wavelet_summary.select_dtypes(include="number").columns.tolist()
-	top10_wavelet_summary[top10_numeric_cols] = top10_wavelet_summary[top10_numeric_cols].fillna(0)	
-	all_wavelet_summary = wavelet_summary.merge(all_bins, on='wavelet_family', how='left')	
-	all_numeric_cols = all_wavelet_summary.select_dtypes(include="number").columns.tolist()
-	all_wavelet_summary[all_numeric_cols] = all_wavelet_summary[all_numeric_cols].fillna(0)
-
-	# Normalize all metrics
-	for col in ['wavelet_family_mean_composite_score', 'wavelet_family_mean_rank_stability', 'wavelet_family_mean_rank', 'wavelet_family_total_count', f'{prefix}global_proportion', f'{prefix}htid_proportion']:
-		top10_wavelet_summary[f'{prefix}normalized_{col}'] = top10_wavelet_summary[col] / top10_wavelet_summary[col].max() if top10_wavelet_summary[col].max() != 0 else 0
-		all_wavelet_summary[f'{prefix}normalized_{col}'] = all_wavelet_summary[col] / all_wavelet_summary[col].max() if all_wavelet_summary[col].max() != 0 else 0
-
-	# Adjust ranking: Lower values for mean rank and composite score are better, so invert them
-	top10_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_composite_score'] = 1 - top10_wavelet_summary[f'{prefix}normalized_wavelet_family_mean_composite_score']
-	top10_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_rank'] = 1 - top10_wavelet_summary[f'{prefix}normalized_wavelet_family_mean_rank']
-	all_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_composite_score'] = 1 - all_wavelet_summary[f'{prefix}normalized_wavelet_family_mean_composite_score']
-	all_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_rank'] = 1 - all_wavelet_summary[f'{prefix}normalized_wavelet_family_mean_rank']
-
-	# Compute final composite score with corrected weighting
-	top10_wavelet_summary[f'{prefix}wavelet_composite_score'] = (
-		0.3 * top10_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_composite_score'] +  # Lower is better
-		0.25 * top10_wavelet_summary[f'{prefix}normalized_wavelet_family_mean_rank_stability'] +  # Higher is better
-		0.15 * top10_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_rank'] +  # Lower is better
-		0.1 * top10_wavelet_summary[f'{prefix}normalized_wavelet_family_total_count'] +  # Higher is better
-		0.1 * top10_wavelet_summary[f'{prefix}normalized_global_proportion'] +  # Higher is better
-		0.1 * top10_wavelet_summary[f'{prefix}normalized_htid_proportion']  # Higher is better
-	)
-
-	# Compute final composite score with corrected weighting
-	all_wavelet_summary[f'{prefix}wavelet_composite_score'] = (
-		0.3 * all_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_composite_score'] +  # Lower is better
-		0.25 * all_wavelet_summary[f'{prefix}normalized_wavelet_family_mean_rank_stability'] +  # Higher is better
-		0.15 * all_wavelet_summary[f'{prefix}inv_normalized_wavelet_family_mean_rank'] +  # Lower is better
-		0.1 * all_wavelet_summary[f'{prefix}normalized_wavelet_family_total_count'] +  # Higher is better
-		0.1 * all_wavelet_summary[f'{prefix}normalized_global_proportion'] +  # Higher is better
-		0.1 * all_wavelet_summary[f'{prefix}normalized_htid_proportion']  # Higher is better
-	)
-
-	# Sort by final score
-	top10_wavelet_summary = top10_wavelet_summary.sort_values(by=['rank_bin', f'wavelet_composite_score'], ascending=[True, False])
-	all_wavelet_summary = all_wavelet_summary.sort_values(by=['rank_bin', f'wavelet_composite_score'], ascending=[True, False])
-
-	# Select the best wavelet
-	top10_wavelet_family = top10_wavelet_summary.iloc[0].wavelet_family
-	all_wavelet_family = all_wavelet_summary.iloc[0].wavelet_family
-
-	if top10_wavelet_family != all_wavelet_family:
-		console.print(f"Best wavelet family (Top 10): {top10_wavelet_family}", style="bright_magenta")
-		console.print(top10_wavelet_summary[['wavelet_family', f'{prefix}wavelet_composite_score', "wavelet_family_mean_rank"]], style="bright_magenta")
-		console.print(f"Best wavelet family (All): {all_wavelet_family}", style="bright_magenta")
-		console.print(all_wavelet_summary[['wavelet_family', f'{prefix}wavelet_composite_score', "wavelet_family_mean_rank"]], style="bright_magenta")
-		# Ask user which wavelet family to use
-		final_wavelet_family = console.input("Which wavelet family would you like to use? (Top 10/All): ")
-		if final_wavelet_family.lower() == 'top 10':
-			console.print(f"Selected Top 10", style="bright_green")
-			final_wavelet_summary = top10_wavelet_summary
-		else:
-			console.print(f"Selected All", style="bright_green")
-			final_wavelet_summary = all_wavelet_summary
-	else:
-		console.print(f"Best wavelet family across both Top 10 and All: {top10_wavelet_family}", style="bright_magenta")
-		final_wavelet_summary = all_wavelet_summary
-		
-
-	final_df = df.merge(final_wavelet_summary, on=['wavelet_family', f'{prefix}rank_bin'], how='left')
-	final_df = final_df.sort_values(by=[f'{prefix}weighted_mean_rank', f'{prefix}wavelet_composite_score'], ascending=[True, False])
-	final_df[f"{prefix}final_wavelet_rank"] = final_df.index + 1
-	return final_df
-
-def select_top_ranked_results(ranked_results: pd.DataFrame, prefix: str, percentage_of_results: float = 0.1) -> pd.DataFrame:
+def select_top_ranked_results(ranked_results: pd.DataFrame, prefix: str, ranking_config: dict, percentage_of_results: float = 0.1) -> pd.DataFrame:
 	"""
 	Selects the top-ranked wavelet configurations dynamically based on the final score.
 	Ensures that the best-performing configurations are chosen within the top N% of results,
@@ -1198,8 +1059,6 @@ def select_top_ranked_results(ranked_results: pd.DataFrame, prefix: str, percent
 		DataFrame containing ranked results with computed scores.
 	prefix : str
 		Prefix for column names (e.g., "combined_" for merged datasets).
-	is_combined : bool
-		Whether results are combined across multiple wavelet types.
 	percentage_of_results : float, optional
 		Percentage of results to retain (default is 10%).
 
@@ -1209,35 +1068,43 @@ def select_top_ranked_results(ranked_results: pd.DataFrame, prefix: str, percent
 		DataFrame with the final top-ranked wavelet configurations.
 	"""
 
-	# Dynamically select the top N% of ranked results
-	num_top_results = max(1, int(len(ranked_results) * percentage_of_results))  # Ensure at least one result
-	top_ranked_results = ranked_results.head(num_top_results)
+	# **Step 1: Check Correlation Between Family & Stability Rank**
+	rank_corr = ranked_results[[f"{prefix}stability_rank", f"{prefix}family_informed_rank"]].corr().iloc[0, 1]
+	console.print(f"[cyan]Correlation between stability and family-informed rank: {rank_corr:.3f}[/cyan]")
 
-	# Select top configurations by wavelet, signal type, and wavelet type
+	# **Step 2: Decide on Ranking Column**
+	if rank_corr >= 0.85:
+		rank_col = f"{prefix}family_informed_rank"
+		console.print("[green]Using family-informed rank for selection (strong correlation).[/green]")
+	else:
+		rank_col = f"{prefix}stability_rank"
+		console.print("[yellow]Using stability rank (weak correlation with family rank).[/yellow]")
+	ranking_config[f"{prefix}selected_rank_column"] = rank_col
+	ranking_config[f"{prefix}selected_rank_column_correlation"] = rank_corr
+	# **Step 3: Select Top N% Based on Chosen Rank**
+	num_top_results = max(1, int(len(ranked_results) * percentage_of_results))  # Ensure at least one result
+	top_ranked_results = ranked_results.nsmallest(num_top_results, rank_col)  # Select lowest (best) ranks
+
+	# **Step 4: Select Best Configurations Per Wavelet**
 	grouping_cols = ['wavelet_type', 'wavelet'] if len(prefix) > 0 else ['wavelet']
 	grouped = ranked_results.groupby(grouping_cols)
 
 	subset_ranked_results = grouped.apply(
-		lambda group: group.loc[group[f"{prefix}final_wavelet_rank"].idxmax()]
+		lambda group: group.loc[group[rank_col].idxmin()]
 	).reset_index(drop=True)
 
-	# Identify columns to drop to avoid duplicate selection
+	# **Step 5: Merge & Deduplicate Results**
 	drop_cols = ['signal_type', 'wavelet_type', 'wavelet', 'wavelet_mode', 'wavelet_level']
 	drop_cols = [col for col in drop_cols if col in subset_ranked_results.columns and col in top_ranked_results.columns]
 
-	# Merge and deduplicate top results with best group selections
 	final_ranked_results = pd.concat([top_ranked_results, subset_ranked_results], ignore_index=True)
 	final_ranked_results = final_ranked_results.drop_duplicates(subset=drop_cols, keep='first')
 
-	# Sort final results by final score
-	final_ranked_results = final_ranked_results.sort_values(
-		by=f"{prefix}weighted_mean_rank", ascending=False
-	).reset_index(drop=True)
-
-	# Assign final ranking
+	# **Step 6: Assign Final Ranking Based on Selected Rank Column**
+	final_ranked_results = final_ranked_results.sort_values(by=rank_col).reset_index(drop=True)
 	final_ranked_results[f"{prefix}top_wavelet_rank"] = final_ranked_results.index + 1
 
-	return final_ranked_results
+	return final_ranked_results, ranking_config
 
 def determine_best_wavelet_representation(
 	results_df: pd.DataFrame, signal_type: str, original_signal_metrics_df: pd.DataFrame, prefix: str = "", epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05, percentage_of_results: float = 0.1, ignore_low_variance: bool = False
@@ -1318,8 +1185,8 @@ def determine_best_wavelet_representation(
 	# **Calculate Rank Stability Using Selected Columns**
 	stable_ranked_results = calculate_rank_stability(final_ranked_results, selected_rank_cols, prefix)
 
-	total_ranked_results = calculate_wavelet_family_scores(stable_ranked_results, prefix)
+	total_ranked_results = calculate_wavelet_family_stability(stable_ranked_results, prefix)
 	
-	top_ranked_results = select_top_ranked_results(total_ranked_results, prefix, percentage_of_results)
+	top_ranked_results, final_ranking_config = select_top_ranked_results(total_ranked_results, prefix, final_ranking_config, percentage_of_results)
 
 	return top_ranked_results, total_ranked_results, final_ranking_config
