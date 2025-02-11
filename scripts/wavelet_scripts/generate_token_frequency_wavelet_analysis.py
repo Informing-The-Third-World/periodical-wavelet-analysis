@@ -143,7 +143,7 @@ def compare_and_rank_wavelet_metrics(
 				results['wavelet_type'] = wavelet_type
 				results['signal_type'] = signal_type
 				results['htid'] = volume_id
-				ranked, subset_ranked, ranking_config = determine_best_wavelet_representation(
+				subset_ranked, ranked, ranking_config = determine_best_wavelet_representation(
 					results, signal_type, signal_metrics_df[signal_metrics_df.signal_type == signal_type]
 				)
 
@@ -313,6 +313,8 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 
 		# Convert to DataFrame for easier analysis
 		signal_metrics_df = pd.DataFrame(signal_metrics_results)
+		signal_volume_data = pd.DataFrame([volume_data])
+		signal_metrics_df = pd.concat([signal_volume_data, signal_metrics_df], axis=1)
 		signal_metrics_df.to_csv("test.csv", index=False)
 		# Calculate wavelet metrics and signal metrics
 		best_wavelet_config = compare_and_rank_wavelet_metrics(

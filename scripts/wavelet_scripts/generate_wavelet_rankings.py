@@ -5,6 +5,7 @@ from typing import Any, Tuple, Union
 # Third-party imports
 import pandas as pd
 import numpy as np
+import ast
 from tqdm import tqdm
 from rich.console import Console
 from sklearn.preprocessing import RobustScaler, MinMaxScaler
@@ -69,16 +70,17 @@ RECONSTRUCTION_METRIC_WEIGHTS = {
 
 	# **Cluster 3: Alignment-Based Metrics (Lower Importance)**
 	"relative_right_bases_global_alignment_score_normalized": 0.1,
-	"relative_right_bases_matcher_alignment_score_normalized": 0.1,
+	"relative_right_bases_array_alignment_score_normalized": 0.1,
 	"relative_left_bases_global_alignment_score_normalized": 0.1,
-	"relative_left_bases_matcher_alignment_score_normalized": 0.1,
+	"relative_left_bases_array_alignment_score_normalized": 0.1,
 	"upper_envelope_diff_normalized": 0.2,
 	"lower_envelope_diff_normalized": 0.2,
-	"relative_peaks_matcher_alignment_score_normalized": 0.2,
+	"relative_peaks_array_alignment_score_normalized": 0.2,
 	"relative_peaks_global_alignment_score_normalized": 0.2,
 }
 
 LOWER_IS_BETTER_METRICS = [
+	# Prominence & amplitude diffs
 	"prominence_min_diff_normalized",
 	"prominence_max_diff_normalized",
 	"avg_prominence_diff_normalized",
@@ -90,6 +92,8 @@ LOWER_IS_BETTER_METRICS = [
 	"positive_frequencies_dtw_normalized",
 	"positive_frequencies_euclidean_normalized",
 	"positive_frequencies_wasserstein_normalized",
+
+	# Spectral & structural fidelity
 	"dynamic_cutoff_diff_normalized",
 	"frequency_max_diff_normalized",
 	"spectral_bandwidth_diff_normalized",
@@ -98,16 +102,20 @@ LOWER_IS_BETTER_METRICS = [
 	"dominant_frequency_diff_normalized",
 	"spectral_magnitude_diff_normalized",
 	"spectral_centroid_diff_normalized",
+
+	# Global vs. array alignment scores (lower distance = better)
 	"relative_right_bases_global_alignment_score_normalized",
-	"relative_right_bases_matcher_alignment_score_normalized",
+	"relative_right_bases_array_alignment_score_normalized",
 	"relative_left_bases_global_alignment_score_normalized",
-	"relative_left_bases_matcher_alignment_score_normalized",
-	"relative_peaks_matcher_alignment_score_normalized",
+	"relative_left_bases_array_alignment_score_normalized",
+	"relative_peaks_array_alignment_score_normalized",
 	"relative_peaks_global_alignment_score_normalized",
+
+	# Envelopes, correlation, etc.
 	"upper_envelope_diff_normalized",
 	"lower_envelope_diff_normalized",
-	"kl_divergence_norm",
-	"emd_value_norm",
+	"kl_divergence_normalized",     
+	"emd_value_normalized",        
 	"max_autocorrelation_diff_normalized"
 ]
 
@@ -145,6 +153,7 @@ def generate_metric_config(metric: str, weight: float) -> dict:
 		"ignore_metric": False,
 		"removal_reason": None,
 		"was_log_transformed": False,
+		"low_variance_detected": False,
 	}
 
 def generate_ranking_config(signal_type: str, prefix: str = "") -> dict:
@@ -178,10 +187,15 @@ def generate_ranking_config(signal_type: str, prefix: str = "") -> dict:
 	return ranking_config
 
 ## WAVELET RANKING PREPROCESSING FUNCTIONS
-def run_global_sequence_alignment(original_sequence: list, reconstructed_sequence: list, placeholder: int = -1) -> int:
+def run_global_sequence_alignment(
+	original_sequence: list, 
+	reconstructed_sequence: list, 
+	placeholder: int = -999999
+) -> int:
 	"""
-	Applies global sequence alignment on the implied zero values within a reconstructed_sequence using minineedle, with placeholders.
-	
+	Applies global sequence alignment on the implied zero/missing values 
+	within a reconstructed_sequence using minineedle, with placeholders.
+
 	Parameters
 	----------
 	original_sequence : list
@@ -194,51 +208,62 @@ def run_global_sequence_alignment(original_sequence: list, reconstructed_sequenc
 	Returns
 	-------
 	alignment_score : int
-		The alignment score. If the alignment fails, returns 0. A higher score indicates a better alignment.
+		The alignment score. If the alignment fails, returns 0.
+		A higher score indicates a better alignment.
 	"""
-	# Extract the observed sequence from the reconstructed_sequence
-	observed_sequence = [float(p) if pd.notna(p) else placeholder for p in reconstructed_sequence]
+	# Convert NaNs to the placeholder
+	observed_sequence = [
+		float(p) if pd.notna(p) else placeholder 
+		for p in reconstructed_sequence
+	]
 	
-	# Check for valid entries in the observed sequence
+	# Check if all are placeholders
 	if all(val == placeholder for val in observed_sequence):
 		return 0
-
+	
 	# Create Needleman-Wunsch global alignment instance
 	alignment = needle.NeedlemanWunsch(observed_sequence, original_sequence)
+	# Adjust scoring matrix if desired
 	alignment.change_matrix(core.ScoreMatrix(match=4, miss=-0.5, gap=-1))
 
 	try:
-		# Run the alignment
 		alignment.align()
 		alignment_score = alignment.get_score()
 		return alignment_score
 
-	except ZeroDivisionError:
+	except Exception as e:
+		console.print(f"[red]Global sequence alignment error: {e}[/red]")
 		return 0
 
-def align_arrays(original_array: list, reconstructed_array: list) -> float:
+def align_arrays(original_array: Union[list, np.ndarray], 
+	reconstructed_array: Union[list, np.ndarray], 
+	threshold: float = 1e-6
+) -> float:
 	"""
-	Align the original and reconstructed arrays using sequence alignment. Uses the SequenceMatcher from difflib to compare the two arrays and return a similarity ratio. A higher ratio indicates a better alignment.
-
-	Parameters
-	----------
-	original_array : list
-		The original array to be aligned.
-	reconstructed_array : list
-		The reconstructed array to be aligned.
-
-	Returns
-	-------
-	float
-		The alignment score. A higher score indicates a better alignment.
+	Example of a numeric alignment measure (simple approach).
+	Returns a fraction of element-wise matches (within a threshold)
+	for arrays of equal length.
+	
+	If arrays differ in length, returns 0.
+	
+	A higher score indicates a closer numeric match (1.0 = perfect).
 	"""
-	# Convert to strings for alignment
-	original_array_str = " ".join(map(str, original_array))
-	reconstructed_array_str = " ".join(map(str, reconstructed_array))
-	matcher = SequenceMatcher(None, original_array_str, reconstructed_array_str)
-	return matcher.ratio()
+	# Convert to numpy
+	orig_np = np.array(original_array)
+	recon_np = np.array(reconstructed_array)
 
-def compare_distributions(original_array: list, reconstructed_array: list, method: str = "dtw") -> float:
+	if len(orig_np) != len(recon_np) or len(orig_np) == 0:
+		return 0.0
+	
+	diff = np.abs(orig_np - recon_np)
+	matches = diff < threshold
+	return np.sum(matches) / len(orig_np)
+
+def compare_distributions(
+	original_array: Union[list, np.ndarray], 
+	reconstructed_array: Union[list, np.ndarray], 
+	method: str = "dtw"
+) -> float:
 	"""
 	Compare two distributions or sequences using the specified method.
 
@@ -259,23 +284,30 @@ def compare_distributions(original_array: list, reconstructed_array: list, metho
 	float
 		Distance or similarity score between the two arrays.
 	"""
+	# Convert to numpy arrays if necessary
+	orig_np = np.array(original_array, dtype=float)
+	recon_np = np.array(reconstructed_array, dtype=float)
+
 	try:
 		if method == "dtw":
-			distance, _ = fastdtw(original_array, reconstructed_array)
+			distance, _ = fastdtw(orig_np, recon_np)
 			return distance
 		elif method == "euclidean":
-			if len(original_array) != len(reconstructed_array):
+			if len(orig_np) != len(recon_np):
 				raise ValueError("Euclidean distance requires arrays of equal length.")
-			return np.sqrt(np.sum((original_array - reconstructed_array) ** 2))
+			return np.sqrt(np.sum((orig_np - recon_np) ** 2))
 		elif method == "wasserstein":
-			return wasserstein_distance(original_array, reconstructed_array)
+			return wasserstein_distance(orig_np, recon_np)
 		else:
 			raise ValueError(f"Unknown method: {method}")
 	except Exception as e:
 		console.print(f"[red]Error comparing distributions using method '{method}': {e}[/red]")
 		return np.nan
 
-def compare_prominences_distribution(original_array: list, reconstructed_array: list) -> tuple:
+def compare_prominences_distribution(
+	original_array: Union[list, np.ndarray], 
+	reconstructed_array: Union[list, np.ndarray]
+) -> tuple:
 	"""
 	Compares prominence distributions using average, total, and Wasserstein distance. Lower values indicate better alignment for average and total differences, and Wasserstein distance.
 
@@ -291,9 +323,16 @@ def compare_prominences_distribution(original_array: list, reconstructed_array: 
 	tuple
 		A tuple containing the average difference, total difference, and Wasserstein distance.
 	"""
-	avg_diff = np.abs(np.mean(original_array) - np.mean(reconstructed_array))
-	total_diff = np.abs(np.sum(original_array) - np.sum(reconstructed_array))
-	wasserstein = compare_distributions(original_array, reconstructed_array, method="wasserstein")
+	orig_np = np.array(original_array, dtype=float)
+	recon_np = np.array(reconstructed_array, dtype=float)
+
+	# Handle edge cases
+	if len(orig_np) == 0 or len(recon_np) == 0:
+		return np.nan, np.nan, np.nan
+
+	avg_diff = np.abs(np.mean(orig_np) - np.mean(recon_np))
+	total_diff = np.abs(np.sum(orig_np) - np.sum(recon_np))
+	wasserstein = compare_distributions(orig_np, recon_np, method="wasserstein")
 	return avg_diff, total_diff, wasserstein
 
 def process_array(original_value: Any, reconstructed_value: Any) -> Tuple[Union[np.ndarray, None], Union[np.ndarray, None]]:
@@ -313,23 +352,43 @@ def process_array(original_value: Any, reconstructed_value: Any) -> Tuple[Union[
 		A tuple containing the converted numpy arrays. If an error occurs, returns (None, None).
 	"""
 	try:
-		original_array = (
-			np.array(eval(original_value)) if isinstance(original_value, str) and original_value.startswith("[") else np.array(original_value)
-		)
-		reconstructed_array = (
-			np.array(eval(reconstructed_value)) if isinstance(reconstructed_value, str) and reconstructed_value.startswith("[") else np.array(reconstructed_value)
-		)
+		# Process original_value
+		if isinstance(original_value, str) and original_value.startswith("["):
+			original_array = np.array(ast.literal_eval(original_value))
+		else:
+			original_array = np.array(original_value)
+		
+		# Process reconstructed_value
+		if isinstance(reconstructed_value, str) and reconstructed_value.startswith("["):
+			reconstructed_array = np.array(ast.literal_eval(reconstructed_value))
+		else:
+			reconstructed_array = np.array(reconstructed_value)
+		
 		return original_array, reconstructed_array
 	except Exception as e:
 		console.print(f"[red]Error processing arrays: {e}[/red]")
 		return None, None
 	
-def convert_to_serializable(value):
-	"""Converts NumPy types to Python native types for JSON serialization."""
+def convert_to_serializable(value: Any) -> Any:
+	"""
+	Converts NumPy types to Python native types for JSON serialization.
+
+	Parameters:
+	----------
+	value : Any
+		The value to convert.
+
+	Returns:
+	-------
+	Any
+		The converted value.
+	"""
 	if isinstance(value, (np.int64, np.int32)):
 		return int(value)
 	elif isinstance(value, (np.float64, np.float32, np.float16)):
 		return float(value)
+	elif isinstance(value, np.ndarray):
+		return value.tolist()
 	else:
 		return value
 
@@ -357,47 +416,79 @@ def preprocess_reconstructed_metrics(original_df: pd.DataFrame, reconstructed_df
 	if len(original_df) != 1:
 		raise ValueError("original_df must contain exactly one row for comparison.")
 
-	
+	# Identify metrics to compare
 	metrics = set(original_df.columns).intersection(set(reconstructed_df.columns)) - {"signal_type"}
 
-	cols_to_add = ['wavelet', 'wavelet_level','wavelet_mode']
-	cols_to_add = [col for col in cols_to_add if col in reconstructed_df.columns]
+	# Extract that single row from original_df as a Series (for easy reference)
+	original_series = original_df.iloc[0]
 
-	for idx, reconstructed_row in tqdm(reconstructed_df.iterrows(), total=reconstructed_df.shape[0], desc="Comparing metrics"):
+	def compare_metrics_in_row(reconstructed_row: pd.Series) -> pd.Series:
+		"""
+		Applies the comparison logic to a single row of reconstructed_df.
+		Modifies the row in-place, adding new columns with comparison scores.
+		"""
 		for metric in metrics:
-			if metric in original_df.columns and metric in reconstructed_df.columns:
-				# Check if the metric is list-like or stringified array
-				if isinstance(original_df[metric].iloc[0], (list, np.ndarray)) or (
-					isinstance(original_df[metric].iloc[0], str) and original_df[metric].iloc[0].startswith("[")
+			if metric in original_series and metric in reconstructed_row:
+				original_val = original_series[metric]
+				recon_val = reconstructed_row[metric]
+
+				# Check if metric is list-like or stringified array
+				if isinstance(original_val, (list, np.ndarray)) or (
+					isinstance(original_val, str) and original_val.startswith("[")
 				):
-					# Convert to numpy arrays
-					original_array, reconstructed_array = process_array(original_df[metric].iloc[0], reconstructed_row[metric])
-					# Skip if arrays are None
+					original_array, reconstructed_array = process_array(original_val, recon_val)
 					if original_array is None or reconstructed_array is None:
+						# Skip if there's an error or invalid arrays
 						continue
-					
+
 					if metric in {"relative_peaks", "relative_left_bases", "relative_right_bases"}:
-						reconstructed_df.loc[idx, f"{metric}_matcher_alignment_score"] = align_arrays(original_array, reconstructed_array)
-						reconstructed_df.loc[idx,f"{metric}_global_alignment_score"] = run_global_sequence_alignment(original_array, reconstructed_array)
+						reconstructed_row[f"{metric}_array_alignment_score"] = align_arrays(
+							original_array, reconstructed_array
+						)
+						reconstructed_row[f"{metric}_global_alignment_score"] = run_global_sequence_alignment(
+							original_array, reconstructed_array
+						)
+					
 					elif metric in {"positive_frequencies", "positive_amplitudes"}:
-						reconstructed_df.loc[idx,f"{metric}_dtw"] = compare_distributions(original_array, reconstructed_array, method="dtw")
+						reconstructed_row[f"{metric}_dtw"] = compare_distributions(
+							original_array, reconstructed_array, method="dtw"
+						)
 						if len(original_array) == len(reconstructed_array):
-							reconstructed_df.loc[idx,f"{metric}_euclidean"] = compare_distributions(original_array, reconstructed_array, method="euclidean")
-						reconstructed_df.loc[idx,f"{metric}_wasserstein"] = compare_distributions(original_array, reconstructed_array, method="wasserstein")
+							reconstructed_row[f"{metric}_euclidean"] = compare_distributions(
+								original_array, reconstructed_array, method="euclidean"
+							)
+						reconstructed_row[f"{metric}_wasserstein"] = compare_distributions(
+							original_array, reconstructed_array, method="wasserstein"
+						)
+					
 					elif metric == "relative_prominences":
-						avg_diff, total_diff, wasserstein = compare_prominences_distribution(original_array, reconstructed_array)
-						reconstructed_df.loc[idx,f"{metric}_avg_diff"] = avg_diff
-						reconstructed_df.loc[idx,f"{metric}_total_diff"] = total_diff
-						reconstructed_df.loc[idx,f"{metric}_wasserstein"] = wasserstein
+						avg_diff, total_diff, wasser_dist = compare_prominences_distribution(
+							original_array, reconstructed_array
+						)
+						reconstructed_row[f"{metric}_avg_diff"] = avg_diff
+						reconstructed_row[f"{metric}_total_diff"] = total_diff
+						reconstructed_row[f"{metric}_wasserstein"] = wasser_dist
+
 				else:
+					# Metric is scalar-like, so just compute absolute difference
 					try:
-						reconstructed_df.loc[idx,f"{metric}_diff"] = abs(float(original_df[metric].iloc[0]) - float(reconstructed_row[metric]))
+						reconstructed_row[f"{metric}_diff"] = abs(
+							float(original_val) - float(recon_val)
+						)
 					except Exception as e:
 						console.print(f"[red]Error computing difference for metric '{metric}': {e}[/red]")
-						reconstructed_df.loc[idx,f"{metric}_diff"] = np.nan
+						reconstructed_row[f"{metric}_diff"] = np.nan
+
+		# Return the modified row
+		return reconstructed_row
+
+	# Apply the comparison to each row in reconstructed_df
+	# axis=1 ensures we process rows individually
+	reconstructed_df = reconstructed_df.apply(compare_metrics_in_row, axis=1)
+
 	return reconstructed_df
 
-def preprocess_signal_metrics(results_df: pd.DataFrame, ranking_config: dict,  ignore_low_variance: bool, epsilon_threshold: float = 1e-6) -> tuple:
+def preprocess_signal_metrics(results_df: pd.DataFrame, ranking_config: dict,  should_ignore_low_variance: bool, epsilon_threshold: float = 1e-6) -> tuple:
 	"""
 	Preprocesses the raw signal metrics DataFrame by handling zero or near-zero variance metrics, log-transforming extreme values in `wavelet_energy_entropy`, and handling complex-valued metrics. It dynamically adjusts weights for low-variance metrics and logs the changes in the ranking configuration. It also log-transforms `wavelet_energy_entropy` if negative values are present. The function then returns the cleaned DataFrame and updated ranking configuration.
 
@@ -407,7 +498,7 @@ def preprocess_signal_metrics(results_df: pd.DataFrame, ranking_config: dict,  i
 		DataFrame containing raw signal metrics.
 	ranking_config : dict
 		Dictionary containing the ranking configuration.
-	ignore_low_variance : bool
+	should_ignore_low_variance : bool
 		Flag to ignore low-variance metrics.
 	epsilon_threshold : float, optional
 		Threshold for zero or near-zero variance metrics (default 1e-6).
@@ -433,10 +524,9 @@ def preprocess_signal_metrics(results_df: pd.DataFrame, ranking_config: dict,  i
 				console.print(
 					f"[yellow]Low variance for '{metric}' (std: {std_dev:.6f}, mean: {avg_value:.6f}).[/yellow]"
 				)
-				metric_config["ignore_metric"] = False
-				metric_config["removal_reason"] = f"Low variance (std: {std_dev:.6f}, mean: {avg_value:.6f})"
+				metric_config["low_variance_detected"] = True
 				# signal_metric_weights[metric] *= 0.5  # Reduce influence of low-variance metrics
-				if ignore_low_variance:
+				if should_ignore_low_variance:
 					metric_config["ignore_metric"] = True
 					metric_config["removal_reason"] = f"Low variance (std: {std_dev:.6f}, mean: {avg_value:.6f})"
 					console.print(
@@ -468,10 +558,17 @@ def preprocess_signal_metrics(results_df: pd.DataFrame, ranking_config: dict,  i
 	return results_df, ranking_config
 
 ## WAVELET NORMALIZATION & Z-SCORING FUNCTIONS
-def normalize_and_zscore(df: pd.DataFrame, metric_list: list,  ranking_config: dict, prefix: str = "",
+def normalize_metrics(
+	df: pd.DataFrame, 
+	metric_list: list,  
+	ranking_config: dict, 
+	prefix: str = "",
+	feature_range=(0, 1)
 ) -> tuple:
 	"""
-	Normalizes and Z-scores the provided metrics in the DataFrame. It uses a RobustScaler to handle outliers and MinMaxScaler for normalization. The function also logs normalization details in the ranking configuration if provided. It skips normalization for metrics with errors and logs the details in the ranking configuration.
+	Scales the provided metrics in the DataFrame using RobustScaler to handle outliers,
+	then MinMaxScaler for final normalization into a specified feature range (default (0,1)).
+	Also applies "lower is better" logic by inverting the scale for such metrics.
 
 	Parameters:
 	----------
@@ -479,75 +576,70 @@ def normalize_and_zscore(df: pd.DataFrame, metric_list: list,  ranking_config: d
 		DataFrame with raw metrics.
 	metric_list : list
 		List of metrics to normalize.
-	lower_is_better_metrics : list
-		List of metrics where lower values are better (to be inverted).
+	ranking_config : dict, optional
+		Dictionary to log normalization details (flags about normalization).
 	prefix : str, optional
 		Prefix for column names (e.g., "combined_" for merged datasets).
-	ranking_config : dict, optional
-		Dictionary to log normalization details.
+	feature_range : tuple of (float, float), optional
+		The (min, max) range for the final MinMax scaling.
 
 	Returns:
 	--------
-	tuple: pd.DataFrame, dict
-	pd.DataFrame
-		DataFrame with normalized and Z-scored metrics.
-	dict
-		Updated ranking configuration with normalization details.
+	tuple: (pd.DataFrame, dict)
+		1) DataFrame with normalized metrics in columns like [prefix]{metric}_normalized
+		2) Updated ranking configuration with normalization details.
 	"""
+	from sklearn.preprocessing import RobustScaler, MinMaxScaler
 
 	scaler_robust = RobustScaler()
-	scaler_minmax = MinMaxScaler(feature_range=(0, 1))
+	scaler_minmax = MinMaxScaler(feature_range=feature_range)
 
 	for metric in metric_list:
 		norm_col = f"{prefix}{metric}_normalized"
-		zscore_col = f"{prefix}{metric}_zscore"
 
 		try:
-			# Robust Scaling to handle outliers
+			# 1) Robust Scaling to reduce outlier effects
 			robust_scaled_values = scaler_robust.fit_transform(df[[metric]]).flatten()
-			minmax_scaled_values = scaler_minmax.fit_transform(robust_scaled_values.reshape(-1, 1)).flatten()
 
-			# Apply normalization and inversion for "lower is better" metrics
+			# 2) MinMax Scaling for final normalization
+			minmax_scaled_values = scaler_minmax.fit_transform(
+				robust_scaled_values.reshape(-1, 1)
+			).flatten()
+
+			# 3) Invert if "lower is better"
 			if metric in LOWER_IS_BETTER_METRICS:
+				# If the entire column is zero (rare), just set everything to 0
 				if df[metric].max() == 0 or pd.isna(df[metric].max()):
-					df[norm_col] = 0  # Avoid division by zero
+					df[norm_col] = 0
 				else:
-					df[norm_col] = 1 - minmax_scaled_values  # Invert scaling
+					df[norm_col] = 1 - minmax_scaled_values
 			else:
-				df[norm_col] = minmax_scaled_values  # Normal MinMax scaling
+				df[norm_col] = minmax_scaled_values
 
-			# Compute Z-score (handle zero variance)
-			std_dev = df[norm_col].std()
-			if std_dev > 0:
-				df[zscore_col] = (df[norm_col] - df[norm_col].mean()) / std_dev
-			else:
-				df[zscore_col] = np.nan  # Avoid division by zero errors
-
-			# Log normalization details if ranking_config is provided
+			# -- Update ranking_config metadata --
 			if ranking_config is not None:
 				for metric_config in ranking_config["metrics"]:
 					if metric_config["metric"] == metric:
 						metric_config["was_normalized"] = True
-						metric_config["was_zscored"] = True
 						metric_config["was_inverted"] = metric in LOWER_IS_BETTER_METRICS
-						break  # Stop after updating the correct metric
+						break
 
 		except ValueError as e:
 			console.print(f"[red]Skipping normalization for {metric}: {e}[/red]")
-			df[norm_col] = np.nan  # Assign NaN for debugging
-			df[zscore_col] = np.nan  # Assign NaN for debugging
+			# Assign NaN for debugging
+			df[norm_col] = np.nan
 
-			# Log error in ranking_config if provided
+			# Log error in ranking_config
 			if ranking_config is not None:
 				for metric_config in ranking_config["metrics"]:
 					if metric_config["metric"] == metric:
 						metric_config["ignore_metric"] = True
-						metric_config["removal_reason"] = "Normalization Error"
+						metric_config["removal_reason"] = f"Normalization Error: {e}"
 						break
 
 	return df, ranking_config
 
-def calculate_normalized_weighted_scores_by_metric_type(df: pd.DataFrame, metric_weights: dict, metric_type: str, prefix: str = "") -> tuple:
+def calculate_normalized_weighted_scores_by_metric_type(df: pd.DataFrame, metric_weights: dict, metric_type: str, prefix: str = "", should_calculate_summed_scores: bool = False) -> tuple:
 	"""
 	This function weights scores for each metric based on the provided weights. It computes both weighted and summed scores for each metric type. It first computes the weighted scores for each metric by multiplying the metric value by the corresponding weight. It then sums the weighted scores across all metrics to obtain the total weighted score for each row. It also computes the simple summation score by summing the raw metric values across all metrics. The function then ranks the results based on the weighted scores and returns the ranked DataFrame.
 
@@ -561,11 +653,13 @@ def calculate_normalized_weighted_scores_by_metric_type(df: pd.DataFrame, metric
 		Type of metric being weighted (e.g., "signal" or "reconstruction").
 	prefix : str, optional
 		Prefix for column names (e.g., "combined_" for merged datasets).
+	should_calculate_summed_scores : bool, optional
+		Flag to calculate summed scores in addition to weighted scores.
 	
 	Returns:
 	--------
 	tuple: pd.DataFrame, list
-		ranked_comparison_df : pd.DataFrame
+		df_copy : pd.DataFrame
 			DataFrame containing the comparison results and rankings.
 		columns : list
 			List of columns used for comparison.
@@ -574,52 +668,64 @@ def calculate_normalized_weighted_scores_by_metric_type(df: pd.DataFrame, metric
 		console.print(f"[yellow]No metrics provided for {metric_type}. Skipping calculations.[/yellow]")
 		return df.copy(), []
 	
-	# Compute weighted scores
+	# We'll create a copy of df so we don't modify the original in-place.
+	df_copy = df.copy()
+
+	# Name of the columns we'll produce
+	weighted_col = f"{prefix}{metric_type}_weighted_score"
+	weighted_norm_col = f"{prefix}{metric_type}_normalized_weighted_score"
+	weighted_rank_col = f"{prefix}{metric_type}_normalized_weighted_rank"
+
+	# Collect valid columns
+	columns = [
+		f"{prefix}{metric}" 
+		for metric in metric_weights.keys() 
+		if f"{prefix}{metric}" in df_copy.columns
+	]
+	# Calculate weighted scores row-by-row
 	tqdm.pandas(desc=f"Calculating {metric_type} weighted scores")
-	
-	# Compute weighted scores
-	df[f"{prefix}{metric_type}_weighted_score"] = df.progress_apply(
+	df_copy[weighted_col] = df_copy.progress_apply(
 		lambda row: sum(
-			weight * row[f"{prefix}{metric}"]
-			for metric, weight in metric_weights.items()
-			if f"{prefix}{metric}" in df.columns and pd.notna(row[f"{prefix}{metric}"])
+			metric_weights[metric] * row[f"{prefix}{metric}"]
+			for metric in metric_weights
+			if f"{prefix}{metric}" in df_copy.columns 
+			   and pd.notna(row[f"{prefix}{metric}"])
 		),
 		axis=1
 	)
 
 	# Normalize weighted scores
-	max_score = df[f"{prefix}{metric_type}_weighted_score"].max()
+	max_score = df_copy[weighted_col].max()
 	if pd.notna(max_score) and max_score > 0:
-		df[f"{prefix}{metric_type}_normalized_weighted_score"] = df[f"{prefix}{metric_type}_weighted_score"] / max_score
+		df_copy[weighted_norm_col] = df_copy[weighted_col] / max_score
 	else:
-		console.print(f"[yellow]Max score is zero or NaN for {metric_type}. Assigning NaN.[/yellow]")
-		df[f"{prefix}{metric_type}_normalized_weighted_score"] = np.nan
+		console.print(f"[yellow]Max score is zero or NaN for {metric_type}. Setting normalized to NaN.[/yellow]")
+		df_copy[weighted_norm_col] = np.nan
 
-	# Rank based on weighted scores
-	ranked_comparison_df = df.sort_values(
-		by=f"{prefix}{metric_type}_normalized_weighted_score", ascending=False
-	).reset_index(drop=True)
-	ranked_comparison_df[f"{prefix}{metric_type}_normalized_weighted_rank"] = ranked_comparison_df.index + 1
+	# Sort by normalized weighted score for ranking (descending)
+	df_copy = df_copy.sort_values(by=weighted_norm_col, ascending=False).reset_index(drop=True)
+	df_copy[weighted_rank_col] = df_copy.index + 1
 
-	# Compute summed scores across all metrics
-	columns = [f"{prefix}{metric}" for metric in metric_weights.keys() if f"{prefix}{metric}" in df.columns]
-	ranked_comparison_df[f"{prefix}{metric_type}_summed_score"] = ranked_comparison_df[columns].sum(axis=1)
+	if should_calculate_summed_scores:
+		summed_col = f"{prefix}{metric_type}_summed_score"
+		summed_norm_col = f"{prefix}{metric_type}_normalized_summed_score"
+		summed_rank_col = f"{prefix}{metric_type}_normalized_summed_rank"
 
-	# Normalize summed scores
-	max_summed_score = ranked_comparison_df[f"{prefix}{metric_type}_summed_score"].max()
-	if pd.notna(max_summed_score) and max_summed_score > 0:
-		ranked_comparison_df[f"{prefix}{metric_type}_normalized_summed_score"] = ranked_comparison_df[f"{prefix}{metric_type}_summed_score"] / max_summed_score
-	else:
-		console.print(f"[yellow]Max summed score is zero or NaN for {metric_type}. Assigning NaN.[/yellow]")
-		ranked_comparison_df[f"{prefix}{metric_type}_normalized_summed_score"] = np.nan
+		# Compute a simple sum across all metrics 
+		df_copy[summed_col] = df_copy[columns].sum(axis=1)
 
-	# Rank based on summed score
-	ranked_comparison_df = ranked_comparison_df.sort_values(
-		by=f"{prefix}{metric_type}_normalized_summed_score", ascending=False
-	).reset_index(drop=True)
-	ranked_comparison_df[f"{prefix}{metric_type}_normalized_summed_rank"] = ranked_comparison_df.index + 1
+		# Normalize the summed score 
+		max_sum = df_copy[summed_col].max()
+		if pd.notna(max_sum) and max_sum > 0:
+			df_copy[summed_norm_col] = df_copy[summed_col] / max_sum
+		else:
+			console.print(f"[yellow]Max summed score is zero or NaN for {metric_type}. Setting to NaN.[/yellow]")
+			df_copy[summed_norm_col] = np.nan
+	
+		df_copy = df_copy.sort_values(by=summed_norm_col, ascending=False).reset_index(drop=True)
+		df_copy[summed_rank_col] = df_copy.index + 1
 
-	return ranked_comparison_df, columns
+	return df_copy, columns
 
 def normalize_weights_dynamically(metrics: list, weights: dict, results_df: pd.DataFrame, ranking_config: dict, threshold: float = 0.9, shared_weight_factor: float = 0.7, specific_weight_factor: float = 0.3,min_weight: float = 0.05, max_weight: float = 0.5) -> tuple:
 	"""
@@ -1079,8 +1185,8 @@ def select_top_ranked_results(ranked_results: pd.DataFrame, prefix: str, ranking
 	else:
 		rank_col = f"{prefix}stability_rank"
 		console.print("[yellow]Using stability rank (weak correlation with family rank).[/yellow]")
-	ranking_config[f"{prefix}selected_rank_column"] = rank_col
-	ranking_config[f"{prefix}selected_rank_column_correlation"] = rank_corr
+	ranking_config[f"{prefix}selected_family_rank_stability_column"] = rank_col
+	ranking_config[f"{prefix}selected_family_rank_stability_column_correlation"] = rank_corr
 	# **Step 3: Select Top N% Based on Chosen Rank**
 	num_top_results = max(1, int(len(ranked_results) * percentage_of_results))  # Ensure at least one result
 	top_ranked_results = ranked_results.nsmallest(num_top_results, rank_col)  # Select lowest (best) ranks
@@ -1107,7 +1213,7 @@ def select_top_ranked_results(ranked_results: pd.DataFrame, prefix: str, ranking
 	return final_ranked_results, ranking_config
 
 def determine_best_wavelet_representation(
-	results_df: pd.DataFrame, signal_type: str, original_signal_metrics_df: pd.DataFrame, prefix: str = "", epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05, percentage_of_results: float = 0.1, ignore_low_variance: bool = False
+	results_df: pd.DataFrame, signal_type: str, original_signal_metrics_df: pd.DataFrame, prefix: str = "", epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05, percentage_of_results: float = 0.1, ignore_low_variance: bool = True
 ) -> tuple:
 	# Generate ranking configuration
 	ranking_config = generate_ranking_config(signal_type, prefix)
@@ -1127,7 +1233,7 @@ def determine_best_wavelet_representation(
 	]
 	
 	# Normalize and Z-score metrics
-	normalized_results_df, ranking_config = normalize_and_zscore(preprocessed_results_df, metrics, ranking_config, prefix)
+	normalized_results_df, ranking_config = normalize_metrics(preprocessed_results_df, metrics, ranking_config, prefix)
 
 	# Calculate summed normalized scores
 	normalized_results_df["across_all_metrics_summed_normalized_score"] = normalized_results_df.filter(like="_normalized").sum(axis=1)
@@ -1181,6 +1287,8 @@ def determine_best_wavelet_representation(
 				f"{prefix}signal_dynamic_summed_rank", f"{prefix}signal_final_dynamic_rank"]:
 		if any(rank_corr_matrix[col][selected_col] >= 0.85 for selected_col in selected_rank_cols):
 			selected_rank_cols.append(col)
+
+	final_ranking_config[f"{prefix}selected_rank_stability_columns"] = selected_rank_cols
 
 	# **Calculate Rank Stability Using Selected Columns**
 	stable_ranked_results = calculate_rank_stability(final_ranked_results, selected_rank_cols, prefix)
