@@ -15,8 +15,8 @@ from rich.console import Console
 import pywt
 
 # Local application imports
-sys.path.append("../..")
-from scripts.utils import read_csv_file, get_data_directory_path, save_chart, generate_table, process_tokens
+sys.path.append("..")
+from scripts.utils import read_csv_file, get_data_directory_path, save_chart, process_tokens
 from scripts.wavelet_scripts.generate_wavelet_stationarity import preprocess_signal_for_stationarity, check_wavelet_stationarity
 from scripts.wavelet_scripts.generate_wavelet_signal_processing import evaluate_dwt_performance, evaluate_dwt_performance_parallel, evaluate_cwt_performance, evaluate_cwt_performance_parallel, evaluate_swt_performance, evaluate_swt_performance_parallel, calculate_signal_metrics
 from scripts.wavelet_scripts.generate_wavelet_plots import plot_volume_frequencies_matplotlib, plot_tokens_per_page, plot_annotated_periodicals
@@ -244,6 +244,38 @@ def filter_wavelets(wavelets: list, exclude_complex: bool = True) -> list:
 		return filtered_wavelets
 	return wavelets
 
+def process_wavelet_type(wavelet_type: str, wavelet_info: dict, signal: np.ndarray, modes: list, signal_type: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+	"""
+	Process a given wavelet type for a signal and return results.
+
+	Parameters
+	----------
+	wavelet_type : str
+		The wavelet type to process (e.g., DWT, CWT, SWT).
+	wavelet_info : dict
+		Dictionary containing wavelet information (wavelets, evaluation function).
+	signal : np.ndarray
+		The signal to process.
+	modes : list
+		List of PyWavelets modes.
+	signal_type : str
+		The type of signal (raw or smoothed).
+	
+	Returns
+	-------
+	pd.DataFrame
+		DataFrame containing results for the wavelet type.
+	pd.DataFrame
+		DataFrame containing skipped results for the wavelet type.
+	"""
+	console.print(f"[blue]Processing {wavelet_type} wavelets for {signal_type} signal...[/blue]")
+	# Evaluate the wavelet type. If DWT, pass modes.
+	if wavelet_type == "DWT":
+		results, skipped_results = wavelet_info["evaluate"](signal, wavelet_info["wavelets"], modes, signal_type)
+	else:
+		results, skipped_results = wavelet_info["evaluate"](signal, wavelet_info["wavelets"], signal_type)
+	return results, skipped_results
+
 def compare_and_rank_wavelet_metrics(
 	raw_signal: np.ndarray,
 	smoothed_signal: np.ndarray,
@@ -300,7 +332,7 @@ def compare_and_rank_wavelet_metrics(
 
 	modes = pywt.Modes.modes
 
-	# wavelet_types - map each wavelet type to a list of wavelets & evaluation function
+	# Define wavelet types and their evaluation functions. If using parallel, use the parallel versions.
 	wavelet_types = {
 		"DWT": {
 			"wavelets": pywt.wavelist(kind='discrete'),
@@ -316,60 +348,49 @@ def compare_and_rank_wavelet_metrics(
 		},
 	}
 
-	# Helper to evaluate wavelet_type for a given signal
-	def process_wavelet_type(wavelet_type, wavelet_info, signal, modes, signal_type):
-		console.print(f"[blue]Processing {wavelet_type} wavelets for {signal_type} signal...[/blue]")
-		# Some wavelet types might skip or have different evaluation logic
-		# This example calls a unified 'evaluate' function from wavelet_info
-		if wavelet_type == "DWT":
-			results, skipped_results = wavelet_info["evaluate"](signal, wavelet_info["wavelets"], modes, signal_type)
-		else:
-			results, skipped_results = wavelet_info["evaluate"](signal, wavelet_info["wavelets"], signal_type)
-		return results, skipped_results
 
-	# We'll gather results across wavelet types & signals
+	# Initialize results list
 	all_results = []
 
 	# Evaluate each wavelet type with raw/smoothed signals
 	for wavelet_type, wavelet_info in wavelet_types.items():
-		console.print(f"[blue]=== Processing wavelet type: {wavelet_type} ===[/blue]")
+		console.print(f"=== Processing wavelet type: {wavelet_type} ===", style="royal_blue1")
 		wavelet_results = []
 		individual_wavelet_directory = os.path.join(wavelet_directory, f"{wavelet_type}_results")
 		os.makedirs(individual_wavelet_directory, exist_ok=True)
 
 		for signal_type, settings in wavelet_transform_settings.items():
 			signal = raw_signal if signal_type == 'raw' else smoothed_signal
-			console.print(f"[blue]  Processing {wavelet_type} wavelets for {signal_type} signal...[/blue]")
-			# Example: skip non-stationary signals for DWT or SWT if needed
+			console.print(f"For {signal_type} signal...", style="light_steel_blue")
+			# Pass over any results where the original signal has no metrics
+			subset_signal_metrics_df = signal_metrics_df[signal_metrics_df.signal_type == signal_type].reset_index(drop=True)
+			if len(subset_signal_metrics_df) == 0:
+				console.print(f"[red]No signal metrics found for {signal_type} signal. Skipping ranking...[/red]")
+				continue
+			# Skip if multiple signal metrics found
+			if len(subset_signal_metrics_df) > 1:
+				subset_signal_metrics_df.to_csv("too_many_signal_metrics.csv", index=False)
+				console.print(f"[red]Multiple signal metrics found for {signal_type} signal. Skipping ranking...[/red]")
+				break
+			# Skip non-stationary signals for DWT/SWT
 			if wavelet_type in ["DWT", "SWT"] and not settings.get("is_stationary", True):
 				console.print(f"[yellow]  Skipping {wavelet_type} for {signal_type} signal (non-stationary).[/yellow]")
 				continue
 
 			results, skipped_results = process_wavelet_type(wavelet_type, wavelet_info, signal, modes, signal_type)
-
-			# Save partial results for this wavelet type & signal
+			# Save results for this wavelet type & signal
 			individual_signal_directory = os.path.join(individual_wavelet_directory, f"{signal_type}_results")
 			os.makedirs(individual_signal_directory, exist_ok=True)
 			individual_signal_file_path = os.path.join(individual_signal_directory, f"{volume_id.replace('.', '_')}")
 
 			if not results.empty:
-				# Tag wavelet_type, signal_type, htid in the results
+				# Add htid, wavelet_type, and signal_type to results
 				results['wavelet_type'] = wavelet_type
 				results['signal_type'] = signal_type
 				results['htid'] = volume_id
 
-				# Now rank them with our new function
-				# returns: (top_ranked_results, total_ranked_results, final_ranking_config)
-				subset_signal_metrics_df = signal_metrics_df[signal_metrics_df.signal_type == signal_type].reset_index(drop=True)
-				if len(subset_signal_metrics_df) == 0:
-					console.print(f"[red]No signal metrics found for {signal_type} signal. Skipping ranking...[/red]")
-					continue
-				if len(subset_signal_metrics_df) > 1:
-					subset_signal_metrics_df.to_csv("too_many_signal_metrics.csv", index=False)
-					console.print(f"[red]Multiple signal metrics found for {signal_type} signal. Skipping ranking...[/red]")
-					break
-				console.print("Calculating best wavelet representation...", style="bright_blue")
-				results.to_csv("results.csv", index=False)
+				console.print("Calculating best wavelet representation...", style="gold3")
+
 				subset_ranked, ranked, ranking_config = determine_best_wavelet_representation(
 					results,
 					signal_type,
@@ -381,7 +402,7 @@ def compare_and_rank_wavelet_metrics(
 					ignore_low_variance=ignore_low_variance
 				)
 
-				# Save them to disk
+				# Save the ranking results
 				ranked.to_csv(f"{individual_signal_file_path}_full_ranked_results.csv", index=False)
 				subset_ranked.to_csv(f"{individual_signal_file_path}_subset_ranked_results.csv", index=False)
 				# Save the ranking_config
@@ -395,20 +416,19 @@ def compare_and_rank_wavelet_metrics(
 			if not skipped_results.empty:
 				skipped_results['wavelet_type'] = wavelet_type
 				skipped_results['signal_type'] = signal_type
+				skipped_results['htid'] = volume_id
 				skipped_results.to_csv(f"{individual_signal_file_path}_skipped_results.csv", index=False)
 
 		# Combine results for this wavelet_type across raw/smoothed
 		results_df = pd.concat(wavelet_results, ignore_index=True) if wavelet_results else pd.DataFrame()
-		console.print(f"Results found: {len(results_df)} rows for {wavelet_type} wavelet type.")
+		console.print(f"Results found: {len(results_df)} rows for {wavelet_type} wavelet type.", style="dark_sea_green2")
 
 		individual_wavelet_file_path = os.path.join(individual_wavelet_directory, f"{volume_id.replace('.', '_')}")
 
-		# If we have any results, do a final pass of ranking across raw+smoothed
-		# maybe you want to treat wavelet_type as 'signal_type' in the new function or just keep it as is:
+		# If results found, calculate best wavelet representation across raw and smoothed signals
 		if not results_df.empty:
 			console.print(f"Calculating best wavelet representation for {wavelet_type} across raw and smoothed signals...", style="bright_cyan")
-			results_df.to_csv("results_df.csv", index=False)
-			# top_ranked_results, total_ranked_results, final_ranking_config
+
 			subset_ranked, ranked, ranking_config = determine_best_wavelet_representation(
 				results_df,
 				wavelet_type,   # reusing param for 'signal_type' in the function 
@@ -420,14 +440,14 @@ def compare_and_rank_wavelet_metrics(
 				ignore_low_variance=ignore_low_variance
 			)
 
-			# Save final wavelet-level ranking
+			# Save the ranking results
 			ranked.to_csv(f"{individual_wavelet_file_path}_across_full_ranked_results.csv", index=False)
 			subset_ranked.to_csv(f"{individual_wavelet_file_path}_across_subset_ranked_results.csv", index=False)
 			ranking_config = json.loads(json.dumps(ranking_config, default=convert_to_native_types))
 			with open(f"{individual_wavelet_file_path}_across_ranking_config.json", "w") as f:
 				json.dump(ranking_config, f, indent=4)
 
-			# Decide if we only keep the top subset or all
+			# If comparing top subset, add subset to all_results. Else add full ranked results.
 			if compare_top_subset:
 				subset_ranked['wavelet_type'] = wavelet_type
 				all_results.append(subset_ranked)
@@ -443,7 +463,7 @@ def compare_and_rank_wavelet_metrics(
 
 	# If empty, no final ranking
 	if combined_all_results.empty:
-		console.print("[red]No valid wavelet configurations found after combining wavelet types.[/red]")
+		console.print("No valid wavelet configurations found after combining wavelet types.", style="red3")
 		return pd.DataFrame()
 
 	console.print(f"Results found: {len(combined_all_results)} rows across all wavelet types. Calculating best wavelet representation...", style="bright_cyan")
@@ -478,8 +498,9 @@ def compare_and_rank_wavelet_metrics(
 	else:
 		console.print("[red]No valid wavelet configurations found after combining wavelet types.[/red]")
 
-	# Return just the top combined results (or the best row if you prefer)
-	return subset_combined
+	# Return just the top combined results 
+	top_wavelet_row = subset_combined[0:1]
+	return top_wavelet_row
 
 ## MAIN FUNCTIONS
 def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: str, should_use_parallel: bool, rerun_data: bool, max_lag: int = 10, significance_level: float = 0.05) -> pd.DataFrame:
@@ -512,8 +533,8 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 		# Extract the directory path without the CSV file
 		directory_path = os.path.dirname(volume['file_path'])
 
-		# Create the new directory path for wavelet_analysis
-		wavelet_analysis_dir = os.path.join(directory_path, 'wavelet_analysis')
+		split_directory_path = directory_path.split('datasets/')[-2:]
+		wavelet_analysis_dir = os.path.join("..", "..", "datasets", split_directory_path[0] + "datasets/", split_directory_path[1])
 
 		if rerun_data and os.path.exists(wavelet_analysis_dir):
 			shutil.rmtree(wavelet_analysis_dir)
@@ -603,7 +624,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 		volume_df = volume_df.drop(columns=['tokens_per_page', 'page_numbers', 'digits_per_page'])
 
 
-		wavelet_results_file_path = wavelet_analysis_dir + f"/{volume['htid'].replace('.', '_')}_wavelet_volume_results.csv"
+		wavelet_results_file_path = os.path.join(wavelet_analysis_dir, f"{volume['htid'].replace('.', '_')}_wavelet_volume_results.csv")
 		volume_df.to_csv(wavelet_results_file_path, index=False)
 
 	# Create DataFrame from volume frequencies
@@ -630,13 +651,7 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 	"""
 	Generates token frequency analysis for all identified HathiTrust periodicals.
 
-	This function performs several tasks to analyze token frequency data extracted from periodicals:
-	1. Identifies annotated periodicals and reads their metadata and token-level data.
-	2. Checks for existing wavelet-processed data and loads it if `load_existing_data` is set to `True`.
-	3. Iterates over a predefined list of preidentified periodicals title by title, processing their volumes either from scratch or by reusing previously saved data.
-	4. Applies various filtering options (e.g., excluding numbers larger than the maximum page number or implied zeroes).
-	5. Aggregates and processes volume-level data, generating signal processing features.
-	6. Saves the resulting token frequency features to a consolidated CSV file for further analysis.
+	This function performs several tasks to analyze token frequency data extracted from periodicals. It processes each periodical volume, calculates token frequencies, and generates wavelet representations for raw and smoothed signals. The function also ranks wavelet configurations to determine the best representation for each volume.
 
 	Parameters:
 	----------
@@ -667,9 +682,14 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 	- The function assumes the existence of certain directories and files, such as the `HathiTrust-pcc-datasets` directory containing periodical metadata and token-level data. It does use the `get_data_directory_path` function to determine the correct path, as well as `os.path.join` to construct file paths so hopefully that will work regardless of the OS.
 
 	"""
+	
+	data_directory_path = get_data_directory_path()
+	console.print(f"Reading preidentified periodicals from {data_directory_path}..", style="bright_blue")
+
+	annotated_directory = os.path.join(data_directory_path, "annotated-HT-pcc-datasets", "datasets", "annotated_ht_ef_datasets")
 	# Count the number of matching files
 	matching_files = []
-	for directory, _, files in tqdm(os.walk(os.path.join("..", "..", "datasets", "annotated_ht_ef_datasets/")), desc="Counting matching files"):
+	for directory, _, files in tqdm(os.walk(annotated_directory), desc="Counting matching files"):
 		for file in files:
 			if file.endswith(".csv") and 'individual' in file:
 				if os.path.exists(os.path.join(directory, file)):
@@ -692,15 +712,13 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 	else:
 		volume_features_df = pd.DataFrame()
 
-	data_directory_path = get_data_directory_path()
-	console.print(f"Reading preidentified periodicals from {data_directory_path}..", style="bright_blue")
-	
+	# Read preidentified periodicals
 	preidentified_periodicals_df = read_csv_file(os.path.join(data_directory_path, "HathiTrust-pcc-datasets", "datasets", "periodical_metadata", "classified_preidentified_periodicals_with_full_metadata.csv"))
 	periodical_titles = preidentified_periodicals_df['lowercase_periodical_name'].unique()
 
 	# Process only annotated periodicals if specified
 	for index, title in enumerate(tqdm(periodical_titles, desc="Processing periodicals")):
-		console.print(f"Processing periodical {title} number ({index + 1} out of {len(periodical_titles)})..", style="bright_blue")
+		console.print(f"Processing periodical {title} number ({index + 1} out of {len(periodical_titles)})..", style="magenta2")
 		subset_preidentified_periodicals_df = preidentified_periodicals_df[preidentified_periodicals_df['lowercase_periodical_name'] == title]
 		volumes = subset_preidentified_periodicals_df.volume_directory.unique()
 		subset_matching_files_df = matching_files_df[matching_files_df['volume_directory'].isin(volumes)]
@@ -710,7 +728,6 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 			console.print(f"No annotated files found for periodical {title}. Skipping...", style="bright_red")
 			continue
 
-		
 		volume_paths = []
 
 		for _, row in subset_preidentified_periodicals_df[subset_preidentified_periodicals_df.volume_directory.notna()].iterrows():
@@ -729,7 +746,7 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 				continue
 			
 			is_annotated_periodical = len(matched_row) > 0
-			file_path = matched_row.file_path.values[0] if len(matched_row) > 0 else os.path.join(data_directory_path, "HathiTrust-pcc-datasets", "datasets", row.publication_directory, "volumes", row['volume_directory'], row['volume_directory'] + "_individual_tokens.csv")
+			file_path = matched_row.file_path.values[0] if is_annotated_periodical else os.path.join(data_directory_path, "HathiTrust-pcc-datasets", "datasets", row.publication_directory, "volumes", row['volume_directory'], row['volume_directory'] + "_individual_tokens.csv")
 			volume_paths.append({
 				'file_path': file_path,
 				'is_annotated_periodical': is_annotated_periodical,
@@ -748,7 +765,8 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 			continue
 
 		volume_paths_df = pd.DataFrame(volume_paths)
-		volume_frequencies = generate_signal_processing_data(volume_paths_df, output_dir="../../figures", should_use_parallel=should_use_parallel, rerun_data=rerun_analysis)
+		figures_dir_path = os.path.join("..", "..", "figures")
+		volume_frequencies = generate_signal_processing_data(volume_paths_df, output_dir=figures_dir_path, should_use_parallel=should_use_parallel, rerun_data=rerun_analysis)
 		# Drop amplitutde and frequency columns for saving file space
 		volume_frequencies = volume_frequencies.drop(columns=['raw_positive_frequencies', 'raw_positive_amplitudes', 'smoothed_positive_frequencies', 'smoothed_positive_amplitudes', 'tokens_per_page', 'page_numbers', 'digits_per_page'])
 		# Save volume frequencies to CSV

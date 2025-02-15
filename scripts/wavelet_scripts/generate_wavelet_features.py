@@ -8,7 +8,6 @@ import altair as alt
 from rich.console import Console
 from scipy.fft import fft
 from scipy.signal import find_peaks
-from skimage.metrics import peak_signal_noise_ratio as psnr
 
 # Disable max rows for Altair
 alt.data_transformers.disable_max_rows()

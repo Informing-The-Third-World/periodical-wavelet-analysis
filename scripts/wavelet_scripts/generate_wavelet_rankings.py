@@ -414,7 +414,6 @@ def preprocess_reconstructed_metrics(original_df: pd.DataFrame, reconstructed_df
 		return pd.DataFrame()
 
 	if len(original_df) != 1:
-		original_df.to_csv("original_df.csv", index=False)
 		raise ValueError("original_df must contain exactly one row for comparison.")
 
 	# Identify metrics to compare
