@@ -534,7 +534,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 		directory_path = os.path.dirname(volume['file_path'])
 
 		split_directory_path = directory_path.split('datasets/')[-2:]
-		wavelet_analysis_dir = os.path.join("..", "..", "datasets", split_directory_path[0] + "datasets/", split_directory_path[1])
+		wavelet_analysis_dir = os.path.join("..", "datasets", split_directory_path[0] + "datasets/", split_directory_path[1])
 
 		if rerun_data and os.path.exists(wavelet_analysis_dir):
 			shutil.rmtree(wavelet_analysis_dir)
@@ -699,7 +699,7 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 	matching_files_df = pd.DataFrame(matching_files)
 	console.print(f"Found {len(matching_files_df)} matching files.", style="bright_green")
 
-	volume_features_output_path = os.path.join("..",  "..", "datasets", "all_volume_features_and_frequencies.csv")
+	volume_features_output_path = os.path.join("..", "datasets", "all_volume_features_and_frequencies.csv")
 	volume_features_exist = False
 	if os.path.exists(volume_features_output_path) and load_existing_data:
 		volume_features_df = read_csv_file(volume_features_output_path)
@@ -765,7 +765,7 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 			continue
 
 		volume_paths_df = pd.DataFrame(volume_paths)
-		figures_dir_path = os.path.join("..", "..", "figures")
+		figures_dir_path = os.path.join("..", "figures")
 		volume_frequencies = generate_signal_processing_data(volume_paths_df, output_dir=figures_dir_path, should_use_parallel=should_use_parallel, rerun_data=rerun_analysis)
 		# Drop amplitutde and frequency columns for saving file space
 		volume_frequencies = volume_frequencies.drop(columns=['raw_positive_frequencies', 'raw_positive_amplitudes', 'smoothed_positive_frequencies', 'smoothed_positive_amplitudes', 'tokens_per_page', 'page_numbers', 'digits_per_page'])
