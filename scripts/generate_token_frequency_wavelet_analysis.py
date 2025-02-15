@@ -17,10 +17,10 @@ import pywt
 # Local application imports
 sys.path.append("..")
 from scripts.utils import read_csv_file, get_data_directory_path, save_chart, process_tokens
-from scripts.wavelet_scripts.generate_wavelet_stationarity import preprocess_signal_for_stationarity, check_wavelet_stationarity
-from scripts.wavelet_scripts.generate_wavelet_signal_processing import evaluate_dwt_performance, evaluate_dwt_performance_parallel, evaluate_cwt_performance, evaluate_cwt_performance_parallel, evaluate_swt_performance, evaluate_swt_performance_parallel, calculate_signal_metrics
-from scripts.wavelet_scripts.generate_wavelet_plots import plot_volume_frequencies_matplotlib, plot_tokens_per_page, plot_annotated_periodicals
-from scripts.wavelet_scripts.generate_wavelet_rankings import determine_best_wavelet_representation
+from scripts.generate_wavelet_stationarity import preprocess_signal_for_stationarity, check_wavelet_stationarity
+from scripts.generate_wavelet_signal_processing import evaluate_dwt_performance, evaluate_dwt_performance_parallel, evaluate_cwt_performance, evaluate_cwt_performance_parallel, evaluate_swt_performance, evaluate_swt_performance_parallel, calculate_signal_metrics
+from scripts.generate_wavelet_plots import plot_volume_frequencies_matplotlib, plot_tokens_per_page, plot_annotated_periodicals
+from scripts.generate_wavelet_rankings import determine_best_wavelet_representation
 
 # Ignore warnings
 warnings.filterwarnings('ignore')
@@ -541,7 +541,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 
 		# Create the wavelet_analysis directory if it doesn't exist
 		os.makedirs(wavelet_analysis_dir, exist_ok=True)
-
+		console.print(f"Wavelet analysis directory: {wavelet_analysis_dir}", style="chartreuse1")
 		# Ensure stationarity for signals
 		tokens_raw_signal, tokens_smoothed_signal, wavelet_transform_settings, skip_analysis, signal_data = ensure_stationarity_for_signals(
 			tokens_raw_signal, tokens_smoothed_signal, max_lag, significance_level

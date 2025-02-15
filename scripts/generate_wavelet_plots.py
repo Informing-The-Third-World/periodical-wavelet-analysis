@@ -4,7 +4,7 @@ from tqdm import tqdm
 import pandas as pd
 import sys
 # Local application imports
-sys.path.append("../..")
+sys.path.append("..")
 from scripts.utils import generate_table, check_if_actual_issue
 
 # Disable max rows for Altair

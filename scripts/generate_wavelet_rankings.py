@@ -10,7 +10,6 @@ from tqdm import tqdm
 from rich.console import Console
 from sklearn.preprocessing import RobustScaler, MinMaxScaler
 from scipy.stats import wasserstein_distance
-from difflib import SequenceMatcher
 from fastdtw import fastdtw
 from minineedle import needle, core
 from tqdm import tqdm
@@ -595,8 +594,6 @@ def normalize_metrics(
 		1) DataFrame with normalized metrics in columns like [prefix]{metric}_normalized
 		2) Updated ranking configuration with normalization details.
 	"""
-	from sklearn.preprocessing import RobustScaler, MinMaxScaler
-
 	scaler_robust = RobustScaler()
 	scaler_minmax = MinMaxScaler(feature_range=feature_range)
 

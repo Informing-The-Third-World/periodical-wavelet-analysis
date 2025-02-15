@@ -17,7 +17,7 @@ from skimage.metrics import peak_signal_noise_ratio as psnr
 
 # Local application imports
 sys.path.append("..")
-from scripts.wavelet_scripts.generate_wavelet_features import *
+from scripts.generate_wavelet_features import *
 
 # Disable max rows for Altair
 alt.data_transformers.disable_max_rows()
