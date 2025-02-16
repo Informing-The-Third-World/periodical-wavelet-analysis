@@ -276,6 +276,265 @@ def process_wavelet_type(wavelet_type: str, wavelet_info: dict, signal: np.ndarr
 		results, skipped_results = wavelet_info["evaluate"](signal, wavelet_info["wavelets"], signal_type)
 	return results, skipped_results
 
+def save_wavelet_results(file_path: str, results: pd.DataFrame, config: dict = None, suffix: str = "") -> None:
+    """
+	Helper function to save results and configuration files.
+	
+	Parameters
+	----------
+	file_path : str
+		Path to the file to save.
+	results : pd.DataFrame
+		DataFrame containing results to save.
+	config : dict, optional
+		Dictionary containing configuration settings.
+	suffix : str, optional
+		Suffix to append to the file name.
+	
+	Returns
+	-------
+	None
+	"""
+    if not results.empty:
+        results.to_csv(f"{file_path}_{suffix}.csv", index=False)
+        if config:
+            config = json.loads(json.dumps(config, default=convert_to_native_types))
+            with open(f"{file_path}_{suffix}_config.json", "w") as f:
+                json.dump(config, f, indent=4)
+    else:
+        console.print("[red]No valid wavelet configurations found.[/red]")
+
+def process_signal_results(results_df: pd.DataFrame,signal_metrics_df: pd.DataFrame,file_path: str,context: str,prefix: str = "",**ranking_params) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+	Process and save results for a given context (signal type or wavelet type).
+	
+	Parameters
+	----------
+	results_df : pd.DataFrame
+		DataFrame containing results to process.
+	signal_metrics_df : pd.DataFrame
+		DataFrame containing signal metrics.
+	file_path : str
+		Path to the file to save.
+	context : str
+		Context for the results (signal type or wavelet type).
+	prefix : str, optional
+		Prefix to add to certain metric columns.
+	ranking_params : dict
+		Dictionary containing ranking parameters.
+		
+	Returns
+	-------
+	pd.DataFrame
+		DataFrame containing subset of top wavelet configurations.
+	pd.DataFrame
+		DataFrame containing ranked wavelet configurations.
+	"""
+    if results_df.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    console.print(f"Calculating best wavelet representation for {context}...", style="bright_cyan")
+    
+    subset_ranked, ranked, ranking_config = determine_best_wavelet_representation(
+        results_df,
+        context,
+        signal_metrics_df,
+        prefix=prefix,
+        **ranking_params
+    )
+    
+    save_wavelet_results(file_path, ranked, ranking_config, "full_ranked_results")
+    save_wavelet_results(file_path, subset_ranked, None, "subset_ranked_results")
+    
+    return subset_ranked, ranked
+
+def compare_and_rank_wavelet_metrics(
+    raw_signal: np.ndarray,
+    smoothed_signal: np.ndarray,
+    wavelet_directory: str,
+    volume_id: str,
+    signal_metrics_df: pd.DataFrame,
+    wavelet_transform_settings: dict,
+    use_parallel: bool = True,
+    epsilon_threshold: float = 1e-6,
+    penalty_weight: float = 0.05,
+    percentage_of_results: float = 0.1,
+    ignore_low_variance: bool = True
+) -> pd.DataFrame:
+    """
+	This function evaluates wavelet performance for a raw signal and its smoothed counterpart across multiple wavelet transforms (DWT, CWT, SWT), then ranks and combines configurations to determine the best overall wavelet representation for the signal.
+
+	Parameters
+	----------
+	raw_signal : np.ndarray
+		The original (raw) 1D signal.
+	smoothed_signal : np.ndarray
+		The smoothed version of the signal.
+	wavelet_directory : str
+		Directory to save intermediate and final results.
+	volume_id : str
+		Identifying string (e.g. a volume name or ID).
+	signal_metrics_df : pd.DataFrame
+		DataFrame containing “original” signal metrics for raw and smoothed signals
+		(one row per signal type, used by determine_best_wavelet_representation).
+	wavelet_transform_settings : dict
+		Dict specifying if signals are stationary or not, or other transform parameters.
+	use_parallel : bool
+		Whether to run wavelet evaluations in parallel.
+	prefix : str
+		Prefix for certain metric columns (if needed).
+	epsilon_threshold : float
+		Threshold for near-zero variance or presence checks in the pipeline.
+	penalty_weight : float
+		Weight factor for penalizing missing metrics in the final dynamic score.
+	percentage_of_results : float
+		Fraction of top results to select for the final subset (default is 0.1).
+	ignore_low_variance : bool
+		If True, skip metrics with near-zero variance in the first pass.
+
+	Returns
+	-------
+	pd.DataFrame
+		DataFrame containing top wavelet configurations across all wavelet types and signals.
+	"""
+    
+    modes = pywt.Modes.modes
+    ranking_params = {
+        'epsilon_threshold': epsilon_threshold,
+        'penalty_weight': penalty_weight,
+        'percentage_of_results': percentage_of_results,
+        'ignore_low_variance': ignore_low_variance
+    }
+
+    wavelet_types = {
+        "DWT": {
+            "wavelets": pywt.wavelist(kind='discrete'),
+            "evaluate": evaluate_dwt_performance_parallel if use_parallel else evaluate_dwt_performance,
+        },
+        "CWT": {
+            "wavelets": filter_wavelets(pywt.wavelist(kind='continuous')),
+            "evaluate": evaluate_cwt_performance_parallel if use_parallel else evaluate_cwt_performance,
+        },
+        "SWT": {
+            "wavelets": pywt.wavelist(kind='discrete'),
+            "evaluate": evaluate_swt_performance_parallel if use_parallel else evaluate_swt_performance,
+        },
+    }
+
+    all_results = []
+    subset_results = []
+
+    # Process each wavelet type
+    for wavelet_type, wavelet_info in wavelet_types.items():
+        console.print(f"=== Processing wavelet type: {wavelet_type} ===", style="royal_blue1")
+        wavelet_results = []
+        individual_wavelet_directory = os.path.join(wavelet_directory, f"{wavelet_type}_results")
+        os.makedirs(individual_wavelet_directory, exist_ok=True)
+
+        # Process each signal type
+        for signal_type, settings in wavelet_transform_settings.items():
+            signal = raw_signal if signal_type == 'raw' else smoothed_signal
+            console.print(f"For {signal_type} signal...", style="light_steel_blue")
+            
+            # Validate signal metrics
+            subset_signal_metrics_df = signal_metrics_df[signal_metrics_df.signal_type == signal_type].reset_index(drop=True)
+            if len(subset_signal_metrics_df) != 1:
+                console.print(f"[red]Invalid number of signal metrics for {signal_type} signal. Skipping ranking...[/red]")
+                if len(subset_signal_metrics_df) > 1:
+                    subset_signal_metrics_df.to_csv("too_many_signal_metrics.csv", index=False)
+                continue
+
+            # Skip non-stationary signals for DWT/SWT
+            if wavelet_type in ["DWT", "SWT"] and not settings.get("is_stationary", True):
+                console.print(f"[yellow]  Skipping {wavelet_type} for {signal_type} signal (non-stationary).[/yellow]")
+                continue
+
+            individual_signal_directory = os.path.join(individual_wavelet_directory, f"{signal_type}_results")
+            os.makedirs(individual_signal_directory, exist_ok=True)
+            individual_signal_file_path = os.path.join(individual_signal_directory, f"{volume_id.replace('.', '_')}")
+
+            # Load existing results or process new ones
+            if os.path.exists(f"{individual_signal_file_path}_full_ranked_results.csv"):
+                console.print(f"Results found for {wavelet_type} {signal_type} signal. Loading...", style="dark_sea_green2")
+                ranked = pd.read_csv(f"{individual_signal_file_path}_full_ranked_results.csv")
+                wavelet_results.append(ranked)
+                continue
+
+            results, skipped_results = process_wavelet_type(wavelet_type, wavelet_info, signal, modes, signal_type)
+            
+            if not results.empty:
+                results.update({
+                    'wavelet_type': wavelet_type,
+                    'signal_type': signal_type,
+                    'htid': volume_id
+                })
+                
+                subset_ranked, ranked = process_signal_results(
+                    results,
+                    subset_signal_metrics_df,
+                    individual_signal_file_path,
+                    signal_type,
+                    **ranking_params
+                )
+                wavelet_results.append(ranked)
+
+            # Save skipped results
+            if not skipped_results.empty:
+                skipped_results.update({
+                    'wavelet_type': wavelet_type,
+                    'signal_type': signal_type,
+                    'htid': volume_id
+                })
+                skipped_results.to_csv(f"{individual_signal_file_path}_skipped_results.csv", index=False)
+
+        # Process results for this wavelet type
+        results_df = pd.concat(wavelet_results, ignore_index=True) if wavelet_results else pd.DataFrame()
+        console.print(f"Results found: {len(results_df)} rows for {wavelet_type} wavelet type.", style="dark_sea_green2")
+
+        if not results_df.empty:
+            individual_wavelet_file_path = os.path.join(individual_wavelet_directory, f"{volume_id.replace('.', '_')}")
+            subset_ranked, ranked = process_signal_results(
+                results_df,
+                signal_metrics_df,
+                individual_wavelet_file_path,
+                wavelet_type,
+                prefix="across_",
+                **ranking_params
+            )
+            
+            subset_ranked['wavelet_type'] = wavelet_type
+            ranked['wavelet_type'] = wavelet_type
+            subset_results.append(subset_ranked)
+            all_results.append(ranked)
+
+    # Process combined results
+    individual_combined_file_path = os.path.join(wavelet_directory, f"{volume_id.replace('.', '_')}")
+    
+    combined_all_results = pd.concat(all_results, ignore_index=True) if all_results else pd.DataFrame()
+    combined_subset_results = pd.concat(subset_results, ignore_index=True) if subset_results else pd.DataFrame()
+    
+    # Process and save final combined results
+    subset_all_combined, _ = process_signal_results(
+        combined_all_results,
+        signal_metrics_df,
+        individual_combined_file_path,
+        "Combined",
+        prefix="combined_",
+        suffix="all",
+        **ranking_params
+    )
+    
+    subset_combined, _ = process_signal_results(
+        combined_subset_results,
+        signal_metrics_df,
+        individual_combined_file_path,
+        "Combined",
+        prefix="combined_",
+        **ranking_params
+    )
+
+    return subset_all_combined[0:1]
+
 def compare_and_rank_wavelet_metrics(
 	raw_signal: np.ndarray,
 	smoothed_signal: np.ndarray,
@@ -348,9 +607,9 @@ def compare_and_rank_wavelet_metrics(
 		},
 	}
 
-
 	# Initialize results list
 	all_results = []
+	subset_results = []
 
 	# Evaluate each wavelet type with raw/smoothed signals
 	for wavelet_type, wavelet_info in wavelet_types.items():
@@ -377,12 +636,18 @@ def compare_and_rank_wavelet_metrics(
 				console.print(f"[yellow]  Skipping {wavelet_type} for {signal_type} signal (non-stationary).[/yellow]")
 				continue
 
-			results, skipped_results = process_wavelet_type(wavelet_type, wavelet_info, signal, modes, signal_type)
 			# Save results for this wavelet type & signal
 			individual_signal_directory = os.path.join(individual_wavelet_directory, f"{signal_type}_results")
 			os.makedirs(individual_signal_directory, exist_ok=True)
 			individual_signal_file_path = os.path.join(individual_signal_directory, f"{volume_id.replace('.', '_')}")
 
+			if os.path.exists(f"{individual_signal_file_path}_full_ranked_results.csv"):
+				console.print(f"Results found for {wavelet_type} {signal_type} signal. Loading...", style="dark_sea_green2")
+				ranked = pd.read_csv(f"{individual_signal_file_path}_full_ranked_results.csv")
+				wavelet_results.append(ranked)
+				continue
+			results, skipped_results = process_wavelet_type(wavelet_type, wavelet_info, signal, modes, signal_type)
+			
 			if not results.empty:
 				# Add htid, wavelet_type, and signal_type to results
 				results['wavelet_type'] = wavelet_type
@@ -448,14 +713,16 @@ def compare_and_rank_wavelet_metrics(
 				json.dump(ranking_config, f, indent=4)
 
 			# If comparing top subset, add subset to all_results. Else add full ranked results.
-			if compare_top_subset:
-				subset_ranked['wavelet_type'] = wavelet_type
-				all_results.append(subset_ranked)
-			else:
-				ranked['wavelet_type'] = wavelet_type
-				all_results.append(ranked)
+			# if compare_top_subset:
+			subset_ranked['wavelet_type'] = wavelet_type
+			subset_results.append(subset_ranked)
+			# else:
+			ranked['wavelet_type'] = wavelet_type
+			all_results.append(ranked)
 
-	# Combine across all wavelet types
+	suffix = "" if compare_top_subset else "all_"
+	individual_combined_file_path = os.path.join(wavelet_directory, f"{volume_id.replace('.', '_')}")
+	# Combine across all wavelet types with full results
 	if all_results:
 		combined_all_results = pd.concat(all_results, ignore_index=True)
 	else:
@@ -465,11 +732,10 @@ def compare_and_rank_wavelet_metrics(
 	if combined_all_results.empty:
 		console.print("No valid wavelet configurations found after combining wavelet types.", style="red3")
 		return pd.DataFrame()
-
+	
 	console.print(f"Results found: {len(combined_all_results)} rows across all wavelet types. Calculating best wavelet representation...", style="bright_cyan")
 	# Final combine across wavelet types
-	# top_ranked_results, total_ranked_results, final_ranking_config
-	subset_combined, ranked_combined, combined_config = determine_best_wavelet_representation(
+	subset_all_combined, ranked_all_combined, combined_all_config = determine_best_wavelet_representation(
 		combined_all_results,
 		"Combined",
 		signal_metrics_df,
@@ -480,26 +746,66 @@ def compare_and_rank_wavelet_metrics(
 		ignore_low_variance=ignore_low_variance
 	)
 
-	suffix = "" if compare_top_subset else "all_"
+	if not ranked_all_combined.empty:
+		ranked_all_combined.to_csv(f"{individual_combined_file_path}_combined_all_results.csv", index=False)
+	else:
+		console.print("[red]No valid wavelet configurations found after combining wavelet types.[/red]")
+		
+	if not subset_all_combined.empty:
+		subset_all_combined.to_csv(f"{individual_combined_file_path}_combined_all_subset.csv", index=False)
+	else:
+		console.print("[red]No valid wavelet configurations found after combining wavelet types.[/red]")
+		subset_all_combined = pd.DataFrame()
+
+	if not combined_all_config:
+		combined_all_config = json.loads(json.dumps(combined_all_config, default=convert_to_native_types))
+		with open(f"{individual_combined_file_path}_combined_all_ranking_config.json", "w") as f:
+			json.dump(combined_all_config, f, indent=4)
+	else:
+		console.print("[red]No valid wavelet configurations found after combining wavelet types.[/red]")
+
+	# Combine across all wavelet types with subset results
+	if subset_results:
+		combined_subset_results = pd.concat(subset_results, ignore_index=True)
+	else:
+		combined_subset_results = pd.DataFrame()
+
+	if combined_subset_results.empty:
+		combined_subset_results = pd.DataFrame()
+		console.print("No valid wavelet configurations found after combining wavelet types.", style="red3")
+
+	console.print(f"Results found: {len(combined_subset_results)} rows across all wavelet types. Calculating best wavelet representation...", style="bright_cyan")
+	# Final combine across wavelet types
+	subset_combined, ranked_combined, combined_config = determine_best_wavelet_representation(
+		combined_subset_results,
+		"Combined",
+		signal_metrics_df,
+		prefix="combined_",
+		epsilon_threshold=epsilon_threshold,
+		penalty_weight=penalty_weight,
+		percentage_of_results=percentage_of_results,
+		ignore_low_variance=ignore_low_variance
+	)
+
 	individual_combined_file_path = os.path.join(wavelet_directory, f"{volume_id.replace('.', '_')}")
 	if not ranked_combined.empty:
-		ranked_combined.to_csv(f"{individual_combined_file_path}_combined_{suffix}results.csv", index=False)
+		ranked_combined.to_csv(f"{individual_combined_file_path}_combined_results.csv", index=False)
 	else:
 		console.print("[red]No valid wavelet configurations found after combining wavelet types.[/red]")
 	if not subset_combined.empty:
-		subset_combined.to_csv(f"{individual_combined_file_path}_combined_{suffix}subset.csv", index=False)
+		subset_combined.to_csv(f"{individual_combined_file_path}_combined_subset.csv", index=False)
 	else:
 		console.print("[red]No valid wavelet configurations found after combining wavelet types.[/red]")
 		subset_combined = pd.DataFrame()
 	if not combined_config:
 		combined_config = json.loads(json.dumps(combined_config, default=convert_to_native_types))
-		with open(f"{individual_combined_file_path}_combined_{suffix}ranking_config.json", "w") as f:
+		with open(f"{individual_combined_file_path}_combined_ranking_config.json", "w") as f:
 			json.dump(combined_config, f, indent=4)
 	else:
 		console.print("[red]No valid wavelet configurations found after combining wavelet types.[/red]")
 
 	# Return just the top combined results 
-	top_wavelet_row = subset_combined[0:1]
+	top_wavelet_row = subset_all_combined[0:1]
 	return top_wavelet_row
 
 ## MAIN FUNCTIONS

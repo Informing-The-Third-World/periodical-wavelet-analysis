@@ -1035,5 +1035,5 @@
         "signal_normalized_dynamically_weighted_rank"
     ],
     "selected_family_rank_stability_column": "family_informed_rank",
-    "selected_family_rank_stability_column_correlation": 0.9999224087606912
+    "selected_family_rank_stability_column_correlation": 0.999922335894817
 }

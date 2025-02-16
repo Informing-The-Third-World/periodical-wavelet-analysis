@@ -897,6 +897,8 @@ def calculate_dynamically_normalized_weighted_score_by_metric_type(
 		return normalized_df, updated_ranking_config
 
 	# 2. Optional: Compute penalty for missing metrics
+	normalized_df[f"{prefix}{metric_type}_num_missing_metrics"] = normalized_df[finalized_metrics].isna().sum(axis=1)
+
 	metric_lookup = {m["metric"]: m.get("ignore_metric", False) for m in updated_ranking_config["metrics"]}
 	missing_metric_col = f"{prefix}{metric_type}_missing_metrics_count"
 	normalized_df[missing_metric_col] = normalized_df.apply(
