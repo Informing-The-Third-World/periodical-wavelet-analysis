@@ -1,3 +1,3 @@
-# Periodical Issue Segmentation
+# Periodical Wavelet Analysis
 
-Repository for experiments in segmenting and identifying issues within larger volumes of periodicals.
+Repository for experiments in modeling token frequency as wavelets to identify likely candidates for issue segmentation and to classify periodicals in the HathiTrust Digital Library.
