@@ -8,8 +8,8 @@ This project applies wavelet transformations to analyze token frequency signals 
 
 The first step is extracting token frequency signals from periodical text. This is handled in:
 
-- `process_tokens()`: Extracts raw and smoothed token frequency signals to capture overall trends while reducing noise.
-- `generate_token_frequency_wavelet_analysis.py`: Loads periodical data, processes token signals, and prepares them for wavelet analysis.
+- `generate_signal_processing_data()`: Loads periodical data and prepares it for token extraction. The function is in the `generate_token_frequency_wavelet_analysis.py` script. It is the main entry point for processing periodicals.
+- `process_tokens()`: Extracts raw and smoothed token frequency signals to capture overall trends while reducing noise. The function is in the `utils.py` script.
 
 ### 2. Stationarity Testing
 
@@ -18,21 +18,93 @@ Before applying wavelet transformations, we check if the token frequency signal 
 - **Wavelet selection depends on stationarity**: Some wavelet methods assume stationarity, while others perform better on non-stationary signals.
 - **Segmenting periodicals effectively**: Stationary signals might indicate consistent writing or typesetting, while non-stationary signals may suggest changes in style, OCR artifacts, or layout shifts.
 
-We use two complementary tests to check for stationarity:
+---
 
-- **Augmented Dickey-Fuller (ADF) Test**: Checks if a signal has a unit root, which indicates non-stationarity. If the test **rejects** the null hypothesis, the signal is likely stationary.
-- **Kwiatkowski-Phillips-Schmidt-Shin (KPSS) Test**: Tests if the signal is trend-stationary. If the test **fails to reject** the null hypothesis, the signal is likely stationary.
+#### **Stationarity Tests and Their Interpretation**
 
-Both tests provide different perspectives on stationarity, and their results together help determine the best approach for further wavelet analysis. This logic is implemented in:
+We use two complementary statistical tests to assess stationarity:
 
-- `check_wavelet_stationarity()`: Runs ADF and KPSS tests and interprets the results.
-- `generate_wavelet_stationarity.py`: Manages stationarity checks across multiple periodicals.
+- **Augmented Dickey-Fuller (ADF) Test**:  
+  - Checks if a signal has a **unit root**, which indicates non-stationarity.
+  - If the **p-value is significant** (≤ `0.05`), we reject the null hypothesis, meaning the signal **is stationary**.
+  - If the **p-value is not significant**, the signal is **non-stationary** and likely contains sharp changes or trends.
 
-### 3. Computing Signal Metrics
+- **Kwiatkowski-Phillips-Schmidt-Shin (KPSS) Test**:  
+  - Checks if a signal is **trend-stationary** (i.e., stationary after removing a deterministic trend).
+  - If the **p-value is significant** (≤ `0.05`), the signal is **non-stationary**.
+  - If the **p-value is not significant**, the signal **is stationary** and does not contain deterministic trends.
 
-After assessing stationarity, we compute various statistical and structural metrics for both the raw and smoothed signals. These metrics provide insight into the characteristics of the signal before wavelet transformation. The function `calculate_signal_metrics()` generates the following key metrics:
+**Interpreting the Combined Results:**
 
-| Metric Name                      | Description                                                                 | Higher or Lower Better? | Interpretation for Token Frequency | Requires Stationarity? |
+- **ADF significant & KPSS not significant → Signal is stationary.**
+- **ADF not significant & KPSS significant → Signal is non-stationary.**
+- **Both significant → Potential trend-stationarity, requiring further preprocessing.**
+- **Both not significant → Likely stationary, but may require additional confirmation.**
+
+---
+
+#### **Adaptive Testing Strategy**
+
+Since stationarity assessments can be sensitive to parameter choices, we test across multiple configurations:
+
+- **Iterating Over `max_lag` Values (`max_lag=[5, 10, 15]`)**:  
+  - The ADF test requires a lag parameter to account for autocorrelation.
+  - We evaluate the signal at **multiple lags**, ensuring that results are not sensitive to a single choice.
+  - The best `max_lag` yielding stationarity is recorded.
+
+- **Returning Detailed Interpretations**:  
+  - Each test result includes an explanation of the statistical decision.
+  - If different `max_lag` values produce different results, the most stationary-friendly result is used.
+
+---
+
+#### **Preprocessing for Stationarity**
+
+If a signal is **non-stationary**, we apply the following transformations in sequence:
+
+1. **Detrending**:  
+   - Removes long-term trends using **linear detrending**.
+   - If the signal remains non-stationary, we proceed to step 2.
+
+2. **Constant Detrending**:  
+   - Removes the mean from the signal.
+   - If the signal is still non-stationary, we proceed to step 3.
+
+3. **First-Order Differencing**:  
+   - Computes the difference between consecutive values to remove trends.
+   - If the signal is still non-stationary, we proceed to step 4.
+
+4. **Second-Order Differencing**:  
+   - Further removes trends by applying differencing twice.
+
+Each transformation is tested in order, and if **any transformation produces a stationary signal**, that transformation is used for further wavelet processing.
+
+---
+
+#### **Implementation**
+
+The stationarity checks and preprocessing are handled in:
+
+- `preprocess_signal_for_stationarity()`:  
+  - Iterates through **multiple stationarity transformations**.
+  - Returns the **first transformation** that achieves stationarity.
+
+- `check_wavelet_stationarity()`:  
+  - Runs **ADF and KPSS tests** across multiple `max_lag` values.
+  - Returns the **best configuration** that confirms stationarity.
+
+- `apply_differencing()` & `apply_detrending()`:  
+  - Apply transformations if the signal is non-stationary.
+
+These functions are implemented in **`generate_wavelet_stationarity.py`** script.
+
+### 3. Computing Signal Features
+
+After assessing stationarity, we compute various statistical and structural features of the signal. These features provide insight into the characteristics of the **raw** and **smoothed** token frequency signals, helping to guide wavelet transformation choices. The function `calculate_signal_metrics()` generates the following key features:
+
+#### **Feature Table**
+
+| Feature Name                     | Description                                                                 | Higher or Lower Better? | Interpretation for Token Frequency | Requires Stationarity? |
 |----------------------------------|-----------------------------------------------------------------------------|-------------------------|-----------------------------------|------------------------|
 | `avg_variance_across_levels`     | Average variance of wavelet coefficients across decomposition levels.        | Higher                  | Indicates more variation in the signal across wavelet scales. | ❌ No |
 | `variance_ratio_across_levels`   | Ratio of max variance to total variance across levels.                       | Lower                   | Suggests a more evenly distributed signal across decomposition levels. | ❌ No |
@@ -53,12 +125,68 @@ After assessing stationarity, we compute various statistical and structural metr
 | `spectral_bandwidth`             | Measure of how spread out the spectral energy is.                           | Higher                  | A wider spread suggests a more complex signal. | ❌ No |
 | `frequency_max`                  | Highest frequency observed in the FFT spectrum.                             | Higher                  | Indicates more rapid fluctuations in token frequency. | ❌ No |
 
-These metrics provide a comprehensive view of the token frequency signal, capturing its periodicity, variance, and structural characteristics. They serve as a basis for evaluating wavelet transformations and identifying the most suitable representation for further analysis.
+These features provide a comprehensive view of the **token frequency signal**, capturing its periodicity, variance, and structural characteristics. They serve as a foundation for evaluating wavelet transformations and identifying the most suitable representation for further analysis. This code is executed in the `generate_wavelet_features.py` script.
 
-#### Key Considerations
+#### **Key Considerations**
 
-- **Most metrics do not require stationarity**, but reconstruction-based ones like `correlation` and `max_autocorrelation` are **more reliable on stationary signals**.
-- **FFT-based metrics (`spectral_*`, `frequency_max`, etc.) are independent of wavelet transforms** and apply to both raw and smoothed signals.
+- **Most features do not require stationarity**, but reconstruction-based ones like `correlation` and `max_autocorrelation` are **more reliable on stationary signals**.
+- **FFT-based features (`spectral_*`, `frequency_max`, etc.) are independent of wavelet transforms** and apply to both raw and smoothed signals.
+- **Peak-based features (`relative_num_peaks`, `avg_prominence`, etc.) rely on a dynamic cutoff method**, ensuring meaningful peak detection across varying token frequencies.
+
+#### **Feature Computation and Parameter Details**
+
+Several parameters in `calculate_signal_metrics()` influence how these features are computed. Below is an explanation of key parameters and their roles:
+
+##### **1. Fast Fourier Transform (FFT) Analysis**
+
+The function `calculate_fft()` is used to extract spectral features from the signal.
+
+- **Minimum Signal Length (`min_length=16`)**  
+  - Ensures that the signal is long enough for FFT to produce meaningful results.
+
+- **Signal-to-Noise Ratio (`snr_threshold=5.0 dB`)**  
+  - Prevents performing FFT on signals dominated by noise.
+
+- **Stationarity Threshold (`stationarity_threshold=0.5`)**  
+  - Ensures that FFT results are reliable by checking whether the power spectrum is stable.
+
+##### **2. Peak Detection Parameters**
+
+Peak-based metrics (`relative_num_peaks`, `avg_prominence`, etc.) are extracted using `detect_relative_peaks()`. This method applies:
+
+- **Prominence Threshold (`prominence=10% of signal’s standard deviation`)**  
+  - Ensures only significant peaks are counted.
+
+- **Minimum Distance Between Peaks (`distance = signal length / 20`)**  
+  - Prevents detecting closely spaced noise fluctuations as peaks.
+
+##### **3. Dynamic Cutoff Calculation**
+
+The function `calculate_dynamic_cutoff()` estimates a dynamic threshold for peak detection.
+
+- **Based on Signal Median and Peak Amplitude:**  
+  - Helps differentiate between meaningful fluctuations and noise.
+
+- **Lower Percentile Enforcement (`10th percentile of the signal`)**  
+  - Ensures that the cutoff is not too extreme.
+
+#### **Implementation Details**
+
+The signal feature computations are handled in:
+
+- **`calculate_signal_metrics()`**  
+  - Main function computing **all** the above features.
+  - Uses multiple helper functions.
+
+- **Helper Functions:**  
+  - `calculate_fft()`, `analyze_fft_peaks()`: Extract spectral properties.  
+  - `detect_relative_peaks()`: Identifies local peaks and their prominence.  
+  - `calculate_autocorrelation()`: Measures periodicity using autocorrelation.  
+  - `calculate_signal_envelope()`: Extracts upper/lower signal bounds.  
+  - `calculate_spectral_features()`: Computes spectral magnitude, centroid, and bandwidth.  
+  - `calculate_dynamic_cutoff()`: Determines meaningful peak detection thresholds.
+
+These functions are implemented in **`generate_wavelet_features.py`**.
 
 ### 4. Applying Wavelet Transformations
 

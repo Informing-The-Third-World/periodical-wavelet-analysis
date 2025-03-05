@@ -69,7 +69,12 @@ def apply_detrending(signal: np.ndarray, method: str = "linear") -> np.ndarray:
 		console.print(f"[red]Error applying detrending: {e}. Returning None.[/red]")
 		return None
 
-def check_wavelet_stationarity(signal: np.ndarray, signal_type: str, max_lag: int = 10, significance_level: float = 0.05) -> dict:
+def check_wavelet_stationarity(
+	signal: np.ndarray, 
+	signal_type: str, 
+	max_lag_range: list = [5, 10, 15],  
+	significance_level: float = 0.05
+) -> dict:
 	"""
 	Check the stationarity of a signal using the Augmented Dickey-Fuller and Kwiatkowski-Phillips-Schmidt-Shin tests.
 
@@ -80,68 +85,100 @@ def check_wavelet_stationarity(signal: np.ndarray, signal_type: str, max_lag: in
 	- Both tests non-significant (p-value > significance): Likely stationary but may require confirmation.
 
 	Parameters:
-	-----------
+	----------
 	signal : np.ndarray
 		The signal to check for stationarity.
 	signal_type : str
 		The type of signal being analyzed (e.g., raw or smoothed).
-	max_lag : int, optional
-		The maximum lag to consider in the ADF test. Default is 10.
+	max_lag_range : list, optional
+		List of max_lag values to test (default: [5, 10, 15]).
 	significance_level : float, optional
-		The significance level for the tests. Default is 0.05.
+		The significance level for the tests (default: 0.05).
 
 	Returns:
 	--------
 	dict:
-		- is_stationary: bool, whether the signal is stationary.
-		- ADF p-value: float, p-value from the ADF test.
-		- KPSS p-value: float, p-value from the KPSS test.
-		- ADF statistic: float, test statistic from the ADF test.
-		- KPSS statistic: float, test statistic from the KPSS test.
+		- is_stationary (bool): Whether the signal is stationary.
+		- best_max_lag (int or None): Best max_lag that yielded stationarity.
+		- ADF p-value (float): p-value from the ADF test.
+		- KPSS p-value (float or None): p-value from the KPSS test.
+		- ADF statistic (float): Test statistic from the ADF test.
+		- KPSS statistic (float or None): Test statistic from the KPSS test.
+		- interpretation (str): Explanation of the result.
 	"""
-	# Augmented Dickey-Fuller Test
-	adf_stat, adf_pvalue, _, _, _, _ = adfuller(signal, maxlag=max_lag)
-	console.print(f"[violet]ADF Test for {signal_type}: Statistic={adf_stat:.4f}, p-value={adf_pvalue:.4f}[/violet]")
+	final_interpretation = None
+	for max_lag in max_lag_range:
+		console.print(f"[blue]Testing stationarity with max_lag={max_lag}...[/blue]")
 
-	# Kwiatkowski-Phillips-Schmidt-Shin Test
-	try:
-		kpss_stat, kpss_pvalue, _, _ = kpss(signal, regression='c')
-		console.print(f"[violet]KPSS Test for {signal_type}: Statistic={kpss_stat:.4f}, p-value={kpss_pvalue:.4f}[/violet]")
-	except ValueError as e:
-		console.print(f"[bright_red]Error in KPSS test: {e}[/bright_red]")
-		return {
-			"is_stationary": False,
-			"ADF p-value": adf_pvalue,
-			"KPSS p-value": None,
-			"ADF statistic": adf_stat,
-			"KPSS statistic": None
-		}
+		# Augmented Dickey-Fuller Test
+		adf_stat, adf_pvalue, _, _, _, _ = adfuller(signal, maxlag=max_lag)
+		console.print(f"[violet]ADF Test for {signal_type}: Statistic={adf_stat:.4f}, p-value={adf_pvalue:.4f}[/violet]")
 
-	# Combined Result Interpretation
-	if adf_pvalue <= significance_level and kpss_pvalue > significance_level:
-		is_stationary = True
-		console.print("[green]Signal is stationary.[/green]")
-	elif adf_pvalue > significance_level and kpss_pvalue <= significance_level:
-		is_stationary = False
-		console.print("[red]Signal is non-stationary.[/red]")
-	elif adf_pvalue <= significance_level and kpss_pvalue <= significance_level:
-		console.print("[yellow]Conflicting results: Further inspection needed.[/yellow]")
-		is_stationary = False
-	else:
-		is_stationary = True
-		console.print("[green]Likely stationary but requires confirmation.[/green]")
+		# Kwiatkowski-Phillips-Schmidt-Shin Test
+		try:
+			kpss_stat, kpss_pvalue, _, _ = kpss(signal, regression='c')
+			console.print(f"[violet]KPSS Test for {signal_type}: Statistic={kpss_stat:.4f}, p-value={kpss_pvalue:.4f}[/violet]")
+		except ValueError as e:
+			console.print(f"[bright_red]Error in KPSS test: {e}[/bright_red]")
+			kpss_stat, kpss_pvalue = None, None  # Handle KPSS failure gracefully
 
+		# --- Interpretation of Stationarity ---
+		if adf_pvalue <= significance_level and (kpss_pvalue is None or kpss_pvalue > significance_level):
+			interpretation = f"Stationary at max_lag={max_lag}. ADF rejected unit root (p={adf_pvalue:.4f}), KPSS failed to reject stationarity (p={kpss_pvalue})."
+			console.print(f"[green]{interpretation}[/green]")
+			return {
+				"is_stationary": True,
+				"best_max_lag": max_lag,
+				"ADF p-value": adf_pvalue,
+				"KPSS p-value": kpss_pvalue,
+				"ADF statistic": adf_stat,
+				"KPSS statistic": kpss_stat,
+				"interpretation": interpretation
+			}
+
+		elif adf_pvalue > significance_level and (kpss_pvalue is not None and kpss_pvalue <= significance_level):
+			interpretation = f"Non-stationary at max_lag={max_lag}. ADF failed to reject unit root (p={adf_pvalue:.4f}), KPSS detected trend-stationarity (p={kpss_pvalue:.4f})."
+			console.print(f"[red]{interpretation}[/red]")
+			final_interpretation = interpretation
+
+		elif adf_pvalue <= significance_level and (kpss_pvalue is not None and kpss_pvalue <= significance_level):
+			interpretation = f"Conflicting results at max_lag={max_lag}. ADF suggests stationarity (p={adf_pvalue:.4f}), but KPSS indicates trend-stationarity (p={kpss_pvalue:.4f}). Further preprocessing may be needed."
+			console.print(f"[yellow]{interpretation}[/yellow]")
+			final_interpretation = interpretation
+
+		else:
+			interpretation = f"Likely stationary at max_lag={max_lag}, but weak statistical evidence. Both tests fail to provide strong conclusions (ADF p={adf_pvalue:.4f}, KPSS p={kpss_pvalue})."
+			console.print(f"[green]{interpretation}[/green]")
+			return {
+				"is_stationary": True,
+				"best_max_lag": max_lag,
+				"ADF p-value": adf_pvalue,
+				"KPSS p-value": kpss_pvalue,
+				"ADF statistic": adf_stat,
+				"KPSS statistic": kpss_stat,
+				"interpretation": interpretation
+			}
+
+	# If no stationary result was found, return the last tested result
+	console.print("[red]Signal remains non-stationary for all max_lag values tested.[/red]")
 	return {
-		"is_stationary": is_stationary,
+		"is_stationary": False,
+		"best_max_lag": None,
 		"ADF p-value": adf_pvalue,
 		"KPSS p-value": kpss_pvalue,
 		"ADF statistic": adf_stat,
-		"KPSS statistic": kpss_stat
+		"KPSS statistic": kpss_stat,
+		"interpretation": f"Signal remains non-stationary despite all tested max_lag values." if final_interpretation is None else final_interpretation + " (best result from all max_lag values)"
 	}
 
 def preprocess_signal_for_stationarity(signal: np.ndarray, signal_type: str, max_lag: int = 10, significance_level: float = 0.05) -> tuple:
 	"""
-	Preprocess a signal to achieve stationarity by applying detrending or differencing if necessary. The function first checks the stationarity of the input signal using the Augmented Dickey-Fuller and Kwiatkowski-Phillips-Schmidt-Shin tests. If the signal is non-stationary, it applies detrending and differencing sequentially until the signal becomes stationary.
+	Preprocess a signal to achieve stationarity by applying detrending or differencing if necessary. The function first checks the stationarity of the input signal using the Augmented Dickey-Fuller and Kwiatkowski-Phillips-Schmidt-Shin tests. If the signal is non-stationary, it applies detrending and differencing sequentially until the signal becomes stationary. We also iterate through the following transformations:
+	- Original signal
+	- Linear detrending
+	- Constant detrending
+	- First-order differencing
+	- Second-order differencing
 
 	A signal of token frequency might be non-stationary if it exhibits trends or seasonality, which can affect the accuracy of wavelet analysis. Preprocessing the signal for stationarity is essential for reliable wavelet decomposition and feature extraction.
 
@@ -162,30 +199,37 @@ def preprocess_signal_for_stationarity(signal: np.ndarray, signal_type: str, max
 		- processed_signal (np.ndarray): The processed signal (stationary if preprocessing is successful).
 		- stationarity_results (dict): Results of the stationarity tests.
 	"""
-	stationarity_result = check_wavelet_stationarity(signal, signal_type, max_lag, significance_level)
-	processed_signal = signal  # Start with the original signal
+	# Initialize stationarity_result to avoid potential NameError
+	stationarity_result = {
+		"is_stationary": False,
+		"best_max_lag": None,
+		"ADF p-value": None,
+		"KPSS p-value": None,
+		"ADF statistic": None,
+		"KPSS statistic": None,
+		"transformation": "None (original signal used)"
+	}
 
-	if stationarity_result["is_stationary"]:
-		console.print("[bright_green]Signal is already stationary. No preprocessing needed.[/bright_green]")
-		return processed_signal, stationarity_result
-	
-	console.print("[yellow]Signal is not stationary. Applying detrending...[/yellow]")
-	detrended_signal = apply_detrending(signal, method="linear")
-	
-	# Re-check stationarity after detrending
-	stationarity_result = check_wavelet_stationarity(detrended_signal, signal_type, max_lag, significance_level)
-	if stationarity_result["is_stationary"]:
-		console.print("[bright_green]Signal is stationary after detrending.[/bright_green]")
-		return detrended_signal, stationarity_result
-	
-	console.print("[yellow]Signal is still not stationary. Applying first-order differencing...[/yellow]")
-	differenced_signal = apply_differencing(detrended_signal, order=1)
-	
-	# Final stationarity check
-	stationarity_result = check_wavelet_stationarity(differenced_signal, signal_type, max_lag, significance_level)
-	if stationarity_result["is_stationary"]:
-		console.print("[bright_green]Signal is stationary after differencing.[/bright_green]")
-		return differenced_signal, stationarity_result
-	else:
-		console.print("[red]Signal remains non-stationary despite preprocessing.[/red]")
-		return differenced_signal, stationarity_result
+	# List of transformations to try in sequence
+	transformations = [
+		("Original", signal),
+		("Linear Detrending", apply_detrending(signal, method="linear")),
+		("Constant Detrending", apply_detrending(signal, method="constant")),
+		("First-Order Differencing", apply_differencing(signal, order=1)),
+		("Second-Order Differencing", apply_differencing(signal, order=2))
+	]
+
+	for method, transformed_signal in transformations:
+		if transformed_signal is None:
+			continue
+
+		console.print(f"[blue]Testing stationarity with {method}...[/blue]")
+		stationarity_result = check_wavelet_stationarity(transformed_signal, signal_type, max_lag, significance_level)
+		stationarity_result["transformation"] = method
+
+		if stationarity_result["is_stationary"]:
+			console.print(f"[green]Signal is stationary after {method}.[/green]")
+			return transformed_signal, stationarity_result
+
+	console.print("[red]Signal remains non-stationary despite all preprocessing attempts.[/red]")
+	return signal, stationarity_result  # Return original signal with last stationarity check
