@@ -18,7 +18,7 @@ import pywt
 sys.path.append("..")
 from scripts.utils import read_csv_file, get_data_directory_path, save_chart, process_tokens
 from scripts.generate_wavelet_stationarity import preprocess_signal_for_stationarity, check_wavelet_stationarity
-from scripts.generate_wavelet_signal_processing import evaluate_dwt_performance, evaluate_dwt_performance_parallel, evaluate_cwt_performance, evaluate_cwt_performance_parallel, evaluate_swt_performance, evaluate_swt_performance_parallel, calculate_signal_metrics
+from scripts.generate_wavelet_transformations import evaluate_dwt_performance, evaluate_dwt_performance_parallel, evaluate_cwt_performance, evaluate_cwt_performance_parallel, evaluate_swt_performance, evaluate_swt_performance_parallel, calculate_signal_metrics
 from scripts.generate_wavelet_plots import plot_volume_frequencies_matplotlib, plot_tokens_per_page, plot_annotated_periodicals
 from scripts.generate_wavelet_rankings import determine_best_wavelet_representation
 
@@ -518,9 +518,9 @@ def compare_and_rank_wavelet_metrics(
         combined_all_results,
         signal_metrics_df,
         individual_combined_file_path,
-        "Combined",
-        prefix="combined_",
-        suffix="all",
+        "All",
+        prefix="all_",
+        suffix="full",
         **ranking_params
     )
     
@@ -528,8 +528,8 @@ def compare_and_rank_wavelet_metrics(
         combined_subset_results,
         signal_metrics_df,
         individual_combined_file_path,
-        "Combined",
-        prefix="combined_",
+        "All",
+        prefix="all_",
         **ranking_params
     )
 

@@ -22,7 +22,7 @@ console = Console()
 
 ## WEIGHTS & CONFIGURATION FOR RANKING
 
-SIGNAL_METRIC_WEIGHTS = {
+WAVELET_SIGNAL_METRIC_WEIGHTS = {
 	# **Cluster 1: Prominence & Amplitude-Based Metrics (Moderate Priority)**
 	"emd_value_normalized": 0.3,
 	"smoothness_normalized": 0.3,
@@ -40,7 +40,7 @@ SIGNAL_METRIC_WEIGHTS = {
 	"kl_divergence_normalized": 0.4,  # Ensured consistency with reconstruction
 }
 
-RECONSTRUCTION_METRIC_WEIGHTS = {
+RECONSTRUCTION_SIGNAL_METRIC_WEIGHTS = {
 	# **Cluster 1: Prominence & Amplitude-Based Metrics (Moderate Importance)**
 	"prominence_min_diff_normalized": 0.3,
 	"positive_amplitudes_dtw_normalized": 0.35,
@@ -177,10 +177,10 @@ def generate_ranking_config(signal_type: str, prefix: str = "") -> dict:
 	}
 	if prefix:
 		ranking_config["comparison_prefix"] = prefix
-	for metric, weight in SIGNAL_METRIC_WEIGHTS.items():
+	for metric, weight in WAVELET_SIGNAL_METRIC_WEIGHTS.items():
 		ranking_config["metrics"].append(generate_metric_config(metric, weight))
 	
-	for metric, weight in RECONSTRUCTION_METRIC_WEIGHTS.items():
+	for metric, weight in RECONSTRUCTION_SIGNAL_METRIC_WEIGHTS.items():
 		ranking_config["metrics"].append(generate_metric_config(metric, weight))
 	console.print(f"Generated ranking configuration for '{signal_type}' signal with {len(ranking_config['metrics'])} metrics.", style="bright_cyan")
 	return ranking_config
@@ -391,7 +391,7 @@ def convert_to_serializable(value: Any) -> Any:
 	else:
 		return value
 
-def preprocess_reconstructed_metrics(original_df: pd.DataFrame, reconstructed_df: pd.DataFrame
+def preprocess_reconstructed_signal_metrics(original_df: pd.DataFrame, reconstructed_df: pd.DataFrame
 ) -> pd.DataFrame:
 	"""
 	Compares the outputs from the calculate_signal_metrics function for the original signal versus all reconstructed wavelets. It assumes that the comparison will be within signal type (so not across raw and smoothed results). It also assumes that the original_df contains only one row of data. The function compares the metrics for each wavelet and returns a DataFrame with the comparison results. It uses a combination of sequence alignment, DTW, and other distance measures to compare the metrics. 
@@ -487,7 +487,7 @@ def preprocess_reconstructed_metrics(original_df: pd.DataFrame, reconstructed_df
 
 	return reconstructed_df
 
-def preprocess_signal_metrics(results_df: pd.DataFrame, ranking_config: dict,  should_ignore_low_variance: bool, epsilon_threshold: float = 1e-6, verbose: bool = False) -> tuple:
+def preprocess_wavelet_signal_metrics(results_df: pd.DataFrame, ranking_config: dict,  should_ignore_low_variance: bool, epsilon_threshold: float = 1e-6, verbose: bool = False) -> tuple:
 	"""
 	Preprocesses the raw signal metrics DataFrame by handling zero or near-zero variance metrics, log-transforming extreme values in `wavelet_energy_entropy`, and handling complex-valued metrics. It dynamically adjusts weights for low-variance metrics and logs the changes in the ranking configuration. It also log-transforms `wavelet_energy_entropy` if negative values are present. The function then returns the cleaned DataFrame and updated ranking configuration.
 
@@ -1262,17 +1262,53 @@ def select_top_ranked_results(
 def determine_best_wavelet_representation(
 	results_df: pd.DataFrame, signal_type: str, original_signal_metrics_df: pd.DataFrame, prefix: str = "", epsilon_threshold: float = 1e-6, penalty_weight: float = 0.05, percentage_of_results: float = 0.1, ignore_low_variance: bool = True
 ) -> tuple:
+	"""
+	Determines the best wavelet representation based on the provided results DataFrame.
+	This function preprocesses the results, normalizes metrics, calculates weighted scores,
+	and dynamically normalizes weights for each metric type. It then computes the final
+	normalized weighted scores and ranks the results based on these scores. It also
+	calculates rank stability and selects the top-ranked wavelet configurations.
+
+	Parameters:
+	-----------
+	results_df : pd.DataFrame
+		DataFrame containing the results with metrics.
+	signal_type : str
+		Type of signal being processed (e.g., "ECG", "EEG", etc.).
+	original_signal_metrics_df : pd.DataFrame
+		DataFrame containing the original signal metrics for comparison.
+	prefix : str, optional
+		Prefix for column names (e.g., "combined_" for merged datasets).
+	epsilon_threshold : float, optional
+		Small value to avoid division-by-zero in dynamic score.
+	penalty_weight : float, optional
+		Weight factor for penalizing missing metrics.
+	percentage_of_results : float, optional
+		Fraction of results to retain (default is 10%).
+	ignore_low_variance : bool, optional
+		Flag to ignore metrics with low variance.
+	
+	Returns:
+	--------
+	tuple: pd.DataFrame, pd.DataFrame, dict
+		top_ranked_results : pd.DataFrame
+			DataFrame containing the top-ranked wavelet configurations.
+		total_ranked_results : pd.DataFrame
+			DataFrame containing all ranked wavelet configurations.
+		final_ranking_config : dict
+			Updated ranking configuration with additional statistics.
+	"""
 	# Generate ranking configuration
 	ranking_config = generate_ranking_config(signal_type, prefix)
 
 	if len(prefix) == 0:
 		console.print("Calculating reconstructed and signal metrics...", style="bright_white")
-		initial_preprocessed_results_df = preprocess_reconstructed_metrics(original_signal_metrics_df, results_df)
-		preprocessed_results_df, ranking_config = preprocess_signal_metrics(initial_preprocessed_results_df, ranking_config, ignore_low_variance, epsilon_threshold)
+		initial_preprocessed_results_df = preprocess_reconstructed_signal_metrics(original_signal_metrics_df, results_df)
+		preprocessed_results_df, ranking_config = preprocess_wavelet_signal_metrics(initial_preprocessed_results_df, ranking_config, ignore_low_variance, epsilon_threshold)
 
 	else:
 		console.print("Calculating signal metrics...", style="bright_white")
-		preprocessed_results_df, ranking_config = preprocess_signal_metrics(results_df, ranking_config, ignore_low_variance, epsilon_threshold)
+		preprocessed_results_df, ranking_config = preprocess_wavelet_signal_metrics(results_df, ranking_config, ignore_low_variance, epsilon_threshold)
 	
 	metrics = [
 		metric_config["metric"]
@@ -1286,36 +1322,36 @@ def determine_best_wavelet_representation(
 
 
 	# Calculate weighted normalized scores
-	partial_weighted_scored_df, reconstruction_columns = calculate_normalized_weighted_scores_by_metric_type(normalized_results_df, RECONSTRUCTION_METRIC_WEIGHTS, "reconstruction", prefix)
-	full_weighted_scored_df, signal_columns = calculate_normalized_weighted_scores_by_metric_type(partial_weighted_scored_df, SIGNAL_METRIC_WEIGHTS, "signal", prefix)
+	partial_weighted_scored_df, reconstruction_signal_columns = calculate_normalized_weighted_scores_by_metric_type(normalized_results_df, RECONSTRUCTION_SIGNAL_METRIC_WEIGHTS, "reconstruction_signal", prefix)
+	full_weighted_scored_df, wavelet_signal_columns = calculate_normalized_weighted_scores_by_metric_type(partial_weighted_scored_df, WAVELET_SIGNAL_METRIC_WEIGHTS, "wavelet_signal", prefix)
 
-	updated_reconstruction_metrics = [
+	updated_reconstruction_signal_metrics = [
 		metric_config["metric"] + "_normalized"
 		for metric_config in ranking_config["metrics"]
 		if not metric_config.get("ignore_metric", False)  # Exclude ignored metrics
-		and metric_config["metric"] + "_normalized" in reconstruction_columns  # Ensure existence in `results_df`
+		and metric_config["metric"] + "_normalized" in reconstruction_signal_columns  # Ensure existence in `results_df`
 	]
 
-	updated_signal_metrics = [
+	updated_wavelet_signal_metrics = [
 		metric_config["metric"] + "_normalized"
 		for metric_config in ranking_config["metrics"]
 		if not metric_config.get("ignore_metric", False)  # Exclude ignored metrics
-		and metric_config["metric"] + "_normalized" in signal_columns  # Ensure existence in `results_df`
+		and metric_config["metric"] + "_normalized" in wavelet_signal_columns  # Ensure existence in `results_df`
 	]
 	
 
 	# Normalize weights dynamically
-	dynamically_ranked_results, updated_ranking_config = calculate_dynamically_normalized_weighted_score_by_metric_type(full_weighted_scored_df, updated_reconstruction_metrics, ranking_config, RECONSTRUCTION_METRIC_WEIGHTS, prefix, "reconstruction", epsilon_threshold, penalty_weight)
-	final_ranked_results, final_ranking_config = calculate_dynamically_normalized_weighted_score_by_metric_type(dynamically_ranked_results, updated_signal_metrics, updated_ranking_config, SIGNAL_METRIC_WEIGHTS, prefix, "signal", epsilon_threshold, penalty_weight)
+	dynamically_ranked_results, updated_ranking_config = calculate_dynamically_normalized_weighted_score_by_metric_type(full_weighted_scored_df, updated_reconstruction_signal_metrics, ranking_config, RECONSTRUCTION_SIGNAL_METRIC_WEIGHTS, prefix, "reconstruction_signal", epsilon_threshold, penalty_weight)
+	final_ranked_results, final_ranking_config = calculate_dynamically_normalized_weighted_score_by_metric_type(dynamically_ranked_results, updated_wavelet_signal_metrics, updated_ranking_config, WAVELET_SIGNAL_METRIC_WEIGHTS, prefix, "wavelet_signal", epsilon_threshold, penalty_weight)
 
 	# Update ranking configuration with additional statistics
 	final_ranking_config = update_ranking_config(final_ranked_results, final_ranking_config, prefix)
 
 
-	# **Compute Correlation Between Different Ranks**
+	# Select ranking columns for final ranking
 	rank_cols = [
-		f"{prefix}reconstruction_normalized_weighted_rank", f"{prefix}reconstruction_normalized_dynamically_weighted_rank", 
-		f"{prefix}signal_normalized_weighted_rank", f"{prefix}signal_normalized_dynamically_weighted_rank",
+		f"{prefix}reconstruction_signal_normalized_weighted_rank", f"{prefix}reconstruction_signal_normalized_dynamically_weighted_rank", 
+		f"{prefix}wavelet_signal_normalized_weighted_rank", f"{prefix}wavelet_signal_normalized_dynamically_weighted_rank",
 	]
 	final_rank_cols = [col for col in rank_cols if col in final_ranked_results.columns]
 
