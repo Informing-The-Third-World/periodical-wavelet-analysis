@@ -557,7 +557,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 	altair_charts = []
 	for _, volume in volume_paths_df.iterrows():
 		console.print(f"Processing volume: {volume['htid']}", style="bright_blue")
-		merged_expanded_df, grouped_df, tokens_raw_signal, tokens_smoothed_signal = process_tokens(
+		merged_expanded_df, grouped_df, tokens_raw_signal, tokens_smoothed_signal, best_smoothed_window_size = process_tokens(
 			volume['file_path'], 
 			volume['is_annotated_periodical'], 
 			volume['should_filter_greater_than_numbers'], 
@@ -575,6 +575,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 		# Create the wavelet_analysis directory if it doesn't exist
 		os.makedirs(wavelet_analysis_dir, exist_ok=True)
 		console.print(f"Wavelet analysis directory: {wavelet_analysis_dir}", style="chartreuse1")
+
 		# Ensure stationarity for signals
 		tokens_raw_signal, tokens_smoothed_signal, wavelet_transform_settings, skip_analysis, signal_data = ensure_stationarity_for_signals(
 			tokens_raw_signal, tokens_smoothed_signal, max_lag, significance_level

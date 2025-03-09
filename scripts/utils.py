@@ -368,6 +368,42 @@ def process_file(file_path: str, is_preidentified_periodical: bool, should_filte
 	return expanded_df, subset_digits, grouped_df
 
 ## DATA PROCESSING FUNCTIONS
+def find_best_window_size(signal: np.ndarray, min_window: int = 3, max_window: int = 15) -> int:
+    """
+    Determine the optimal moving average window size for smoothing a signal.
+
+    Parameters:
+    ----------
+    signal : np.ndarray
+        The raw token frequency signal.
+    min_window : int, optional
+        The minimum window size to test.
+    max_window : int, optional
+        The maximum window size to test.
+
+    Returns:
+    -------
+    int
+        The best window size based on variance reduction.
+    """
+    best_window = min_window
+    best_criteria = float('inf')
+
+    for window in range(min_window, max_window + 1, 2):  # Ensure odd windows for symmetry
+        smoothed_signal = pd.Series(signal).rolling(window=window, center=True).mean().fillna(0).to_numpy()
+        variance_reduction = np.var(signal) - np.var(smoothed_signal)
+        smoothness = 1 / (1 + np.mean(np.abs(np.diff(smoothed_signal, n=2))))  # Second-order difference
+
+        # Combine metrics to select best window (higher variance reduction, smoother signal)
+        combined_score = variance_reduction - smoothness
+
+        if combined_score < best_criteria:
+            best_criteria = combined_score
+            best_window = window
+
+    return best_window
+
+
 def process_tokens(file_path: str, preidentified_periodical: bool, should_filter_greater_than_numbers: bool, should_filter_implied_zeroes: bool) -> tuple:
 	"""
 	Processes and cleans token-level data extracted from OCR-processed periodicals, preparing it for wavelet analysis.
@@ -405,6 +441,7 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 		  ready for further analysis (e.g., FFT or wavelet transformations).
 		- `tokens_smoothed_signal` (np.ndarray): The smoothed token frequency signal as a 1D 
 		  array, obtained via a moving average.
+		- `best_window_size` (int): The best window size determined for smoothing the signal.
 	"""
 	expanded_df, subset_digits, grouped_df = process_file(file_path, preidentified_periodical, should_filter_greater_than_numbers, should_filter_implied_zeroes)
 	
@@ -427,12 +464,15 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 	merged_expanded_df['tokens_per_page'] = merged_expanded_df['tokens_per_page'].fillna(0)
 	merged_expanded_df['digits_per_page'] = merged_expanded_df['digits_per_page'].fillna(0)
 	merged_expanded_df = merged_expanded_df.sort_values(by='page_number')
+
+	# Determine the best window size dynamically
+	best_window_size = find_best_window_size(merged_expanded_df['tokens_per_page'].values)
 	
-	# Apply smoothing (moving average)
+	# Apply smoothing (moving average) using dynamic window size
 	merged_expanded_df['smoothed_tokens_per_page'] = (
 		merged_expanded_df['tokens_per_page']
 		.where(merged_expanded_df['tokens_per_page'] > 0)
-		.rolling(window=5, center=True)
+		.rolling(window=best_window_size, center=True)
 		.mean()
 		.fillna(0)
 	)
@@ -441,10 +481,11 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 		(merged_expanded_df['smoothed_tokens_per_page'] - merged_expanded_df['smoothed_tokens_per_page'].mean()) 
 		/ merged_expanded_df['smoothed_tokens_per_page'].std()
 	)
+	# Apply smoothing for digits per page using the same best window size
 	merged_expanded_df['smoothed_digits_per_page'] = (
 		merged_expanded_df['digits_per_page']
 		.where(merged_expanded_df['digits_per_page'] > 0)
-		.rolling(window=5, center=True)
+		.rolling(window=best_window_size, center=True)
 		.mean()
 		.fillna(0)
 	)
@@ -475,7 +516,7 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 	(tokens_raw_signal)
 	console.print(f"Raw Signal Length: {len(tokens_raw_signal)}", style="bright_green")
 	console.print(f"Smoothed Signal Length: {len(tokens_smoothed_signal)}", style="bright_green")
-	return merged_expanded_df, grouped_df, tokens_raw_signal, tokens_smoothed_signal
+	return merged_expanded_df, grouped_df, tokens_raw_signal, tokens_smoothed_signal, best_window_size
 
 def check_if_actual_issue(row: pd.Series, grouped_df: pd.DataFrame) -> bool:
 	"""
