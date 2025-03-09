@@ -69,11 +69,43 @@ def apply_detrending(signal: np.ndarray, method: str = "linear") -> np.ndarray:
 		console.print(f"[red]Error applying detrending: {e}. Returning None.[/red]")
 		return None
 
+def calculate_autocorrelation(signal: np.ndarray, lag: int = 1) -> float:
+	"""
+	Calculate autocorrelation at a given lag.
+
+	Parameters:
+	-----------
+	signal : np.ndarray
+		The input signal.
+	lag : int, optional
+		Lag value for autocorrelation. Default is 1.
+
+	Returns:
+	--------
+	float:
+		Autocorrelation coefficient.
+	"""
+	if len(signal) <= lag:
+		console.print("[red]Signal length is too short for autocorrelation. Returning 0.0.[/red]")
+		return 0.0  # Not enough data for autocorrelation
+
+	# Calculate autocorrelation
+	try: 
+		autocorrelation = np.corrcoef(signal[:-lag], signal[lag:])[0, 1]
+		if np.isnan(autocorrelation):
+			console.print("[red]Autocorrelation is NaN. Returning 0.0.[/red]")
+			return 0.0
+		return autocorrelation
+	except Exception as e:
+		console.print(f"[red]Error calculating autocorrelation: {e}. Returning 0.0.[/red]")
+		return 0.0
+
 def check_wavelet_stationarity(
 	signal: np.ndarray, 
 	signal_type: str, 
 	max_lag_range: list = [5, 10, 15],  
-	significance_level: float = 0.05
+	significance_level: float = 0.05,
+	autocorr_threshold: float = 0.1
 ) -> dict:
 	"""
 	Check the stationarity of a signal using the Augmented Dickey-Fuller and Kwiatkowski-Phillips-Schmidt-Shin tests.
@@ -94,6 +126,8 @@ def check_wavelet_stationarity(
 		List of max_lag values to test (default: [5, 10, 15]).
 	significance_level : float, optional
 		The significance level for the tests (default: 0.05).
+	autocorr_threshold : float, optional
+		Threshold for autocorrelation to consider a signal stationary (default: 0.1).
 
 	Returns:
 	--------
@@ -107,6 +141,7 @@ def check_wavelet_stationarity(
 		- interpretation (str): Explanation of the result.
 	"""
 	final_interpretation = None
+	autocorr_value = calculate_autocorrelation(signal)
 	for max_lag in max_lag_range:
 		console.print(f"[blue]Testing stationarity with max_lag={max_lag}...[/blue]")
 
@@ -129,11 +164,12 @@ def check_wavelet_stationarity(
 			return {
 				"is_stationary": True,
 				"best_max_lag": max_lag,
-				"ADF p-value": adf_pvalue,
-				"KPSS p-value": kpss_pvalue,
-				"ADF statistic": adf_stat,
-				"KPSS statistic": kpss_stat,
-				"interpretation": interpretation
+				"adf_pvalue": adf_pvalue,
+				"kpss_pvalue": kpss_pvalue,
+				"adf_statistic": adf_stat,
+				"kpss_statistic": kpss_stat,
+				"interpretation": interpretation,
+				"autocorrelation": autocorr_value
 			}
 
 		elif adf_pvalue > significance_level and (kpss_pvalue is not None and kpss_pvalue <= significance_level):
@@ -146,19 +182,20 @@ def check_wavelet_stationarity(
 			console.print(f"[yellow]{interpretation}[/yellow]")
 			final_interpretation = interpretation
 
-		else:
-			interpretation = f"Likely stationary at max_lag={max_lag}, but weak statistical evidence. Both tests fail to provide strong conclusions (ADF p={adf_pvalue:.4f}, KPSS p={kpss_pvalue})."
-			console.print(f"[green]{interpretation}[/green]")
-			return {
-				"is_stationary": True,
-				"best_max_lag": max_lag,
-				"ADF p-value": adf_pvalue,
-				"KPSS p-value": kpss_pvalue,
-				"ADF statistic": adf_stat,
-				"KPSS statistic": kpss_stat,
-				"interpretation": interpretation
-			}
-
+	# If both tests are non-significant but autocorrelation is low, consider the signal stationary
+	if autocorr_value < autocorr_threshold:
+		interpretation = f"Autocorrelation ({autocorr_value:.4f}) suggests stationarity despite weak ADF/KPSS results." if final_interpretation is None else final_interpretation + f" (autocorrelation={autocorr_value:.4f}) and below threshold. Therefore, signal is stationary."
+		console.print(f"[green]{interpretation}[/green]")
+		return {
+			"is_stationary": True,
+			"best_max_lag": None,
+			"ADF p-value": adf_pvalue,
+			"KPSS p-value": kpss_pvalue,
+			"ADF statistic": adf_stat,
+			"KPSS statistic": kpss_stat,
+			"interpretation": interpretation,
+			"autocorrelation": autocorr_value
+		}
 	# If no stationary result was found, return the last tested result
 	console.print("[red]Signal remains non-stationary for all max_lag values tested.[/red]")
 	return {
@@ -168,10 +205,11 @@ def check_wavelet_stationarity(
 		"KPSS p-value": kpss_pvalue,
 		"ADF statistic": adf_stat,
 		"KPSS statistic": kpss_stat,
-		"interpretation": f"Signal remains non-stationary despite all tested max_lag values." if final_interpretation is None else final_interpretation + " (best result from all max_lag values)"
+		"interpretation": f"Signal remains non-stationary despite all tested max_lag values." if final_interpretation is None else final_interpretation + " (best result from all max_lag values)",
+		"autocorrelation": autocorr_value
 	}
 
-def preprocess_signal_for_stationarity(signal: np.ndarray, signal_type: str, max_lag: int = 10, significance_level: float = 0.05) -> tuple:
+def preprocess_signal_for_stationarity(signal: np.ndarray, signal_type: str) -> tuple:
 	"""
 	Preprocess a signal to achieve stationarity by applying detrending or differencing if necessary. The function first checks the stationarity of the input signal using the Augmented Dickey-Fuller and Kwiatkowski-Phillips-Schmidt-Shin tests. If the signal is non-stationary, it applies detrending and differencing sequentially until the signal becomes stationary. We also iterate through the following transformations:
 	- Original signal
@@ -224,7 +262,7 @@ def preprocess_signal_for_stationarity(signal: np.ndarray, signal_type: str, max
 			continue
 
 		console.print(f"[blue]Testing stationarity with {method}...[/blue]")
-		stationarity_result = check_wavelet_stationarity(transformed_signal, signal_type, max_lag, significance_level)
+		stationarity_result = check_wavelet_stationarity(transformed_signal, signal_type)
 		stationarity_result["transformation"] = method
 
 		if stationarity_result["is_stationary"]:

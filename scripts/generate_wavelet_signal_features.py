@@ -234,295 +234,15 @@ def calculate_spectral_features(
 	}
 
 def analyze_spectral_peaks(spectral_amplitudes: np.ndarray, spectral_frequencies: np.ndarray, verbose: bool, min_peak_prominence: float = 0.01) -> dict:
-    """
-    Analyze positive frequencies and amplitudes from spectral transformations (FFT or STFT) to determine key characteristics.
-
-    Parameters:
-    -----------
-    spectral_amplitudes : np.ndarray
-        Spectral-transformed signal amplitudes (e.g., FFT or STFT).
-    spectral_frequencies : np.ndarray
-        Frequencies corresponding to the spectral transformation.
-    min_peak_prominence : float, optional
-        Minimum prominence of peaks for detection. Default is 0.01.
-
-    Returns:
-    --------
-    dict:
-        A dictionary containing:
-        - `num_peaks`: Number of detected peaks in the spectral amplitudes.
-        - `peak_amplitude`: Amplitude of the most prominent peak, or None if no peaks.
-        - `dominant_frequency`: Frequency corresponding to the most prominent peak, or None if no peaks.
-        - `positive_frequencies`: List of positive frequencies.
-        - `positive_amplitudes`: List of positive amplitudes.
-    """
-    if spectral_amplitudes is None or spectral_frequencies is None:
-        if verbose:
-            console.print("[yellow]Spectral results are missing; skipping peak analysis.[/yellow]")
-        return {
-            "num_peaks": None,
-            "peak_amplitude": None,
-            "dominant_frequency": None,
-            "positive_frequencies": None,
-            "positive_amplitudes": None,
-        }
-
-    # Extract positive frequencies and amplitudes
-    positive_frequencies = spectral_frequencies[:len(spectral_frequencies) // 2]
-    positive_amplitudes = np.abs(spectral_amplitudes[:len(spectral_amplitudes) // 2])
-
-    # Ensure amplitudes are non-zero for meaningful peak detection
-    if len(positive_amplitudes) == 0 or np.all(positive_amplitudes == 0):
-        if verbose:
-            console.print("[yellow]Spectral amplitudes are zero or empty; skipping peak analysis.[/yellow]")
-        return {
-            "num_peaks": 0,
-            "peak_amplitude": None,
-            "dominant_frequency": None,
-            "positive_frequencies": positive_frequencies.tolist() if positive_frequencies is not None else [],
-            "positive_amplitudes": positive_amplitudes.tolist() if positive_amplitudes is not None else [],
-        }
-
-    # Detect peaks in the spectral amplitudes
-    try:
-        peaks, _ = find_peaks(positive_amplitudes, prominence=min_peak_prominence)
-        num_peaks = len(peaks)
-
-        peak_amplitude = (
-            np.max(positive_amplitudes[peaks]) if num_peaks > 0 else None
-        )
-        dominant_frequency = (
-            positive_frequencies[peaks[np.argmax(positive_amplitudes[peaks])]]
-            if num_peaks > 0 else None
-        )
-
-        return {
-            "num_peaks": num_peaks,
-            "peak_amplitude": peak_amplitude,
-            "dominant_frequency": dominant_frequency,
-            "positive_frequencies": positive_frequencies.tolist() if positive_frequencies is not None else [],
-            "positive_amplitudes": positive_amplitudes.tolist() if positive_amplitudes is not None else [],
-        }
-
-    except Exception as e:
-        if verbose:
-            console.print(f"[red]Error during peak analysis from analyze_spectral_peaks function: {e}[/red]")
-        return {
-            "num_peaks": None,
-            "peak_amplitude": None,
-            "dominant_frequency": None,
-            "positive_frequencies": positive_frequencies.tolist() if positive_frequencies is not None else [],
-            "positive_amplitudes": positive_amplitudes.tolist() if positive_amplitudes is not None else [],
-        }
-
-def calculate_stft(tokens_signal: np.ndarray, verbose: bool, min_length: int = 16,
-                   snr_thresholds: list = [3.0, 5.0, 7.0], 
-                   stationarity_thresholds: list = [0.3, 0.5, 0.7],
-                   windows: list = ["boxcar", "hann", "hamming", "blackman", "flattop", "tukey", "blackmanharris", "nuttall", "barthann", "cosine"], 
-                   nperseg_values: list = [16, 32, 64], 
-                   noverlap_ratio: float = 0.5) -> dict:
-    """
-    Compute the Short-Time Fourier Transform (STFT) and extract spectral features with thresholding.
-
-    Parameters:
-    -----------
-    tokens_signal : np.ndarray
-        The input signal.
-    verbose : bool
-        Whether to display detailed output.
-    min_length : int
-        Minimum length required for STFT analysis.
-    snr_thresholds : list
-        List of SNR thresholds to check.
-    stationarity_thresholds : list
-        List of stationarity thresholds to check.
-    windows : list
-        List of window types to test.
-    nperseg_values : list
-        List of segment lengths to test.
-    noverlap_ratio : float
-        Fraction of segment length to use as overlap.
-
-    Returns:
-    --------
-    dict:
-        A dictionary containing spectral features and STFT characteristics.
-    """
-    # Check if the signal is long enough for STFT
-    if len(tokens_signal) < min_length:
-        if verbose:
-            console.print(f"[yellow]Signal length ({len(tokens_signal)}) too short for STFT.[/yellow]")
-        return None
-
-    best_result = None
-
-    # Iterate over parameter combinations
-    for window in windows:
-        for nperseg in nperseg_values:
-            noverlap = int(nperseg * noverlap_ratio)  # Compute overlap dynamically
-
-            for snr_threshold in snr_thresholds:
-                for stationarity_threshold in stationarity_thresholds:
-                    # Compute Signal-to-Noise Ratio (SNR) using power spectrum instead of convolution
-                    signal_power = np.mean(tokens_signal ** 2)
-                    noise_power = np.mean((tokens_signal - np.mean(tokens_signal)) ** 2)
-                    snr = 10 * np.log10(signal_power / (noise_power + 1e-6))  # Avoid division by zero
-
-                    if snr < snr_threshold:
-                        if verbose:
-                            console.print(f"[yellow]Low SNR ({snr:.2f} dB); skipping STFT for window {window} (SNR threshold={snr_threshold}).[/yellow]")
-                        continue
-
-                    # Compute STFT
-                    frequencies, times, Zxx = spectrogram(tokens_signal, window=window, nperseg=nperseg, noverlap=noverlap)
-                    magnitude = np.abs(Zxx)
-
-                    # Compute power spectral density variations to check stationarity
-                    psd_variations = np.sum(magnitude, axis=0)
-                    psd_variations_std = np.std(psd_variations)
-                    psd_variations_mean = np.mean(psd_variations) + 1e-6  # Avoid divide by zero
-
-                    if psd_variations_std > psd_variations_mean * stationarity_threshold:
-                        if verbose:
-                            console.print(f"[yellow]Signal non-stationary (Threshold={stationarity_threshold}); skipping STFT for window {window}.[/yellow]")
-                        continue
-
-                    # Compute spectral features from STFT
-                    spectral_features = calculate_spectral_features(magnitude.sum(axis=1), frequencies, verbose)
-
-                    result = {
-						"stft_dominant_frequency": spectral_features.get("frequency_max"),
-						"stft_peak_amplitude": spectral_features.get("amplitude_max"),
-						"stft_spectral_centroid": spectral_features.get("spectral_centroid"),
-						"stft_spectral_bandwidth": spectral_features.get("spectral_bandwidth"),
-						"stft_spectral_magnitude": spectral_features.get("spectral_magnitude"),
-						"stft_variance_magnitude": np.var(magnitude), 
-						"stft_peak_freq_over_time": frequencies[np.argmax(magnitude, axis=0)].tolist() if magnitude.size > 0 else None,  # Peak frequency over time
-						"stft_snr_threshold": snr_threshold,
-						"stft_stationarity_threshold": stationarity_threshold,
-						"stft_window": window,
-						"stft_nperseg": nperseg,
-						"stft_noverlap": noverlap
-					}
-
-                    # Track the best STFT result (e.g., highest spectral magnitude)
-                    if best_result is None or result["stft_spectral_magnitude"] > best_result["stft_spectral_magnitude"]:
-                        best_result = result
-
-    if verbose and best_result:
-        console.print(f"[green]Best STFT config: Window={best_result['stft_window']}, nperseg={best_result['stft_nperseg']}, SNR={best_result['stft_snr_threshold']}[/green]")
-
-    return best_result if best_result else None
-
-def calculate_fft(
-	tokens_signal: np.ndarray,
-	verbose: bool,
-	min_length: int = 16,
-	snr_thresholds: list = [3.0, 5.0, 7.0],  # Now iterating over SNR thresholds
-	stationarity_thresholds: list = [0.3, 0.5, 0.7]  # Iterating over stationarity thresholds
-) -> dict:
 	"""
-	Calculate the Fast Fourier Transform (FFT) of a given signal. This function first ensures the signal is suitable for FFT analysis
-	by validating its length, signal-to-noise ratio (SNR), and stationarity. If the signal passes these checks, the FFT is performed.
+	Analyze positive frequencies and amplitudes from spectral transformations (FFT or STFT) to determine key characteristics.
 
 	Parameters:
 	-----------
-	tokens_signal : np.ndarray
-		The signal to analyze.
-	verbose : bool
-		Whether to display verbose output.
-	min_length : int, optional
-		Minimum length of the signal for FFT analysis. Default is 16.
-	snr_thresholds : list, optional
-		List of signal-to-noise ratio (SNR) thresholds to test.
-	stationarity_thresholds : list, optional
-		List of stationarity thresholds to check power spectral density variations.
-
-	Returns:
-	--------
-	tuple:
-		- positive_amplitudes: np.ndarray or None
-		  Positive amplitudes of the signal if valid, otherwise None.
-		- positive_frequencies: np.ndarray or None
-		  Positive frequencies of the signal if valid, otherwise None.
-		- final_snr_threshold: float or None
-		  The final SNR threshold used for FFT analysis.
-		- final_stationarity_threshold: float or None
-		  The final stationarity threshold used for FFT analysis.
-	"""
-	# Check signal length
-	if len(tokens_signal) < min_length:
-		if verbose:
-			console.print(f"[yellow]Signal length ({len(tokens_signal)}) is too short for meaningful FFT analysis.[/yellow]")
-		return None # Return None if signal is too short
-
-	best_result = None
-
-	# Iterate over SNR and stationarity thresholds
-	for snr_threshold in snr_thresholds:
-		for stationarity_threshold in stationarity_thresholds:
-			# Compute Signal-to-Noise Ratio (SNR)
-			smoothed_signal = np.convolve(tokens_signal, np.ones(5) / 5, mode='same')
-			signal_power = np.sum(tokens_signal ** 2)
-			noise_power = np.sum((tokens_signal - smoothed_signal) ** 2)
-			snr = 10 * np.log10(signal_power / (noise_power + 1e-6))  # Avoid division by zero
-
-			if snr < snr_threshold:
-				if verbose:
-					console.print(f"[yellow]Low SNR ({snr:.2f} dB); FFT may not provide meaningful results (SNR threshold={snr_threshold}).[/yellow]")
-				continue  # Try the next combination
-
-			# Check stationarity
-			chunk_size = max(len(tokens_signal) // 4, 16)  # Ensure minimum chunk size
-			psd_variations = []
-			for i in range(0, len(tokens_signal), chunk_size):
-				chunk = tokens_signal[i:i + chunk_size]
-				chunk_fft = np.abs(fft(chunk))[:len(chunk) // 2]  # Positive amplitudes only
-				psd_variations.append(chunk_fft.sum())
-
-			# Add safeguard for std deviation (prevent division issues)
-			psd_variations_std = np.std(psd_variations)
-			psd_variations_mean = np.mean(psd_variations) + 1e-6  # Small epsilon to prevent divide by zero
-			if psd_variations_std > psd_variations_mean * stationarity_threshold:
-				if verbose:
-					console.print(f"[yellow]Signal shows significant non-stationarity; FFT results may be unreliable (Threshold={stationarity_threshold}).[/yellow]")
-				continue  # Try the next combination
-
-			# Perform FFT
-			tokens_fft = fft(tokens_signal)
-			frequencies = np.fft.fftfreq(len(tokens_fft))
-			positive_frequencies = frequencies[:len(frequencies) // 2]
-			positive_amplitudes = np.abs(tokens_fft[:len(tokens_fft) // 2])
-
-			# Compute spectral features from FFT
-			spectral_features = calculate_spectral_features(positive_amplitudes, positive_frequencies, verbose)
-
-			result = {
-				"fft_dominant_frequency": spectral_features["frequency_max"],
-				"fft_peak_amplitude": spectral_features["amplitude_max"],
-				"fft_spectral_centroid": spectral_features["spectral_centroid"],
-				"fft_spectral_bandwidth": spectral_features["spectral_bandwidth"],
-				"fft_spectral_magnitude": spectral_features["spectral_magnitude"],
-				"fft_snr_threshold": snr_threshold,
-				"fft_stationarity_threshold": stationarity_threshold
-			}
-
-			# Track the best FFT result (e.g., highest spectral magnitude)
-			if best_result is None or result["fft_spectral_magnitude"] > best_result["fft_spectral_magnitude"]:
-				best_result = result
-
-	return best_result if best_result else None
-
-def analyze_fft_peaks(tokens_fft: np.ndarray, frequencies: np.ndarray, verbose: bool, min_peak_prominence: float = 0.01) -> dict:
-	"""
-	Analyze positive frequencies and amplitudes from FFT results to determine key characteristics. If either tokens_fft or frequencies is None, peak analysis is skipped.
-
-	Parameters:
-	-----------
-	tokens_fft : np.ndarray
-		FFT-transformed signal (complex values).
-	frequencies : np.ndarray
-		Frequencies corresponding to the FFT-transformed signal.
+	spectral_amplitudes : np.ndarray
+		Spectral-transformed signal amplitudes (e.g., FFT or STFT).
+	spectral_frequencies : np.ndarray
+		Frequencies corresponding to the spectral transformation.
 	min_peak_prominence : float, optional
 		Minimum prominence of peaks for detection. Default is 0.01.
 
@@ -530,15 +250,15 @@ def analyze_fft_peaks(tokens_fft: np.ndarray, frequencies: np.ndarray, verbose: 
 	--------
 	dict:
 		A dictionary containing:
-		- `num_peaks`: Number of detected peaks in the FFT amplitudes.
+		- `num_peaks`: Number of detected peaks in the spectral amplitudes.
 		- `peak_amplitude`: Amplitude of the most prominent peak, or None if no peaks.
 		- `dominant_frequency`: Frequency corresponding to the most prominent peak, or None if no peaks.
 		- `positive_frequencies`: List of positive frequencies.
 		- `positive_amplitudes`: List of positive amplitudes.
 	"""
-	if tokens_fft is None or frequencies is None:
+	if spectral_amplitudes is None or spectral_frequencies is None:
 		if verbose:
-			console.print("[yellow]FFT results are missing; skipping peak analysis.[/yellow]")
+			console.print("[yellow]Spectral results are missing; skipping peak analysis.[/yellow]")
 		return {
 			"num_peaks": None,
 			"peak_amplitude": None,
@@ -548,31 +268,31 @@ def analyze_fft_peaks(tokens_fft: np.ndarray, frequencies: np.ndarray, verbose: 
 		}
 
 	# Extract positive frequencies and amplitudes
-	positive_frequencies = frequencies[:len(frequencies) // 2]
-	positive_amplitudes = np.abs(tokens_fft[:len(tokens_fft) // 2])
+	positive_frequencies = spectral_frequencies[:len(spectral_frequencies) // 2]
+	positive_amplitudes = np.abs(spectral_amplitudes[:len(spectral_amplitudes) // 2])
 
 	# Ensure amplitudes are non-zero for meaningful peak detection
 	if len(positive_amplitudes) == 0 or np.all(positive_amplitudes == 0):
 		if verbose:
-			console.print("[yellow]FFT amplitudes are zero or empty; skipping peak analysis.[/yellow]")
+			console.print("[yellow]Spectral amplitudes are zero or empty; skipping peak analysis.[/yellow]")
 		return {
 			"num_peaks": 0,
 			"peak_amplitude": None,
 			"dominant_frequency": None,
-			"positive_frequencies": positive_frequencies,
-			"positive_amplitudes": positive_amplitudes,
+			"positive_frequencies": positive_frequencies.tolist() if positive_frequencies is not None else [],
+			"positive_amplitudes": positive_amplitudes.tolist() if positive_amplitudes is not None else [],
 		}
 
-	# Detect peaks in the FFT amplitudes
+	# Detect peaks in the spectral amplitudes
 	try:
-		peaks, _ = find_peaks(positive_amplitudes[1:], prominence=min_peak_prominence)
+		peaks, _ = find_peaks(positive_amplitudes, prominence=min_peak_prominence)
 		num_peaks = len(peaks)
 
 		peak_amplitude = (
-			np.max(positive_amplitudes[1:][peaks]) if num_peaks > 0 else None
+			np.max(positive_amplitudes[peaks]) if num_peaks > 0 else None
 		)
 		dominant_frequency = (
-			positive_frequencies[peaks[np.argmax(positive_amplitudes[1:][peaks])]]
+			positive_frequencies[peaks[np.argmax(positive_amplitudes[peaks])]]
 			if num_peaks > 0 else None
 		)
 
@@ -586,7 +306,7 @@ def analyze_fft_peaks(tokens_fft: np.ndarray, frequencies: np.ndarray, verbose: 
 
 	except Exception as e:
 		if verbose:
-			console.print(f"[red]Error during peak analysis from analyze_fft_peaks function: {e}[/red]")
+			console.print(f"[red]Error during peak analysis from analyze_spectral_peaks function: {e}[/red]")
 		return {
 			"num_peaks": None,
 			"peak_amplitude": None,
@@ -594,7 +314,7 @@ def analyze_fft_peaks(tokens_fft: np.ndarray, frequencies: np.ndarray, verbose: 
 			"positive_frequencies": positive_frequencies.tolist() if positive_frequencies is not None else [],
 			"positive_amplitudes": positive_amplitudes.tolist() if positive_amplitudes is not None else [],
 		}
-	
+
 def calculate_dynamic_cutoff(
 	tokens_signal: np.ndarray,
 	verbose: bool,
@@ -645,6 +365,237 @@ def calculate_dynamic_cutoff(
 
 	return best_cutoff, final_percentile
 
+def calculate_stft(tokens_signal: np.ndarray, verbose: bool, min_length: int = 16,
+				   snr_thresholds: list = [3.0, 5.0, 7.0], 
+				   stationarity_thresholds: list = [0.3, 0.5, 0.7],
+				   windows: list = ["boxcar", "hann", "hamming", "blackman", "flattop", "tukey", "blackmanharris", "nuttall", "barthann", "cosine"], 
+				   nperseg_values: list = [16, 32, 64], 
+				   noverlap_ratio: float = 0.5) -> dict:
+	"""
+	Compute the Short-Time Fourier Transform (STFT) and extract spectral features with thresholding.
+
+	Parameters:
+	-----------
+	tokens_signal : np.ndarray
+		The input signal.
+	verbose : bool
+		Whether to display detailed output.
+	min_length : int
+		Minimum length required for STFT analysis.
+	snr_thresholds : list
+		List of SNR thresholds to check.
+	stationarity_thresholds : list
+		List of stationarity thresholds to check.
+	windows : list
+		List of window types to test.
+	nperseg_values : list
+		List of segment lengths to test.
+	noverlap_ratio : float
+		Fraction of segment length to use as overlap.
+
+	Returns:
+	--------
+	dict:
+		A dictionary containing spectral features and STFT characteristics.
+	"""
+	# Check if the signal is long enough for STFT
+	if len(tokens_signal) < min_length:
+		if verbose:
+			console.print(f"[yellow]Signal length ({len(tokens_signal)}) too short for STFT.[/yellow]")
+		return None
+
+	best_result = None
+
+	# Iterate over parameter combinations
+	for window in windows:
+		for nperseg in nperseg_values:
+			noverlap = int(nperseg * noverlap_ratio)  # Compute overlap dynamically
+
+			for snr_threshold in snr_thresholds:
+				for stationarity_threshold in stationarity_thresholds:
+					# Compute Signal-to-Noise Ratio (SNR) using power spectrum instead of convolution
+					signal_power = np.mean(tokens_signal ** 2)
+					noise_power = np.mean((tokens_signal - np.mean(tokens_signal)) ** 2)
+					snr = 10 * np.log10(signal_power / (noise_power + 1e-6))  # Avoid division by zero
+
+					if snr < snr_threshold:
+						if verbose:
+							console.print(f"[yellow]Low SNR ({snr:.2f} dB); skipping STFT for window {window} (SNR threshold={snr_threshold}).[/yellow]")
+						continue
+
+					# Compute STFT
+					frequencies, times, Zxx = spectrogram(tokens_signal, window=window, nperseg=nperseg, noverlap=noverlap)
+					magnitude = np.abs(Zxx)
+
+					# Compute power spectral density variations to check stationarity
+					psd_variations = np.sum(magnitude, axis=0)
+					psd_variations_std = np.std(psd_variations)
+					psd_variations_mean = np.mean(psd_variations) + 1e-6  # Avoid divide by zero
+
+					if psd_variations_std > psd_variations_mean * stationarity_threshold:
+						if verbose:
+							console.print(f"[yellow]Signal non-stationary (Threshold={stationarity_threshold}); skipping STFT for window {window}.[/yellow]")
+						continue
+
+					# Compute spectral features from STFT
+					spectral_features = calculate_spectral_features(magnitude.sum(axis=1), frequencies, verbose)
+
+					# Analyze spectral peaks
+					spectral_peaks = analyze_spectral_peaks(magnitude.sum(axis=1), frequencies, verbose)
+
+					# Compute dynamic cutoff using the detected peak amplitude
+					dynamic_cutoff, cutoff_percentile = calculate_dynamic_cutoff(
+						tokens_signal=tokens_signal,
+						verbose=verbose,
+						peak_amplitude=spectral_peaks.get("peak_amplitude", 0)
+					)
+
+					result = {
+						"stft_frequency_max": spectral_features.get("frequency_max"),
+						"stft_amplitude_max": spectral_features.get("amplitude_max"),
+						"stft_spectral_centroid": spectral_features.get("spectral_centroid"),
+						"stft_spectral_bandwidth": spectral_features.get("spectral_bandwidth"),
+						"stft_spectral_magnitude": spectral_features.get("spectral_magnitude"),
+						"stft_variance_magnitude": np.var(magnitude), 
+						"stft_peak_freq_over_time": frequencies[np.argmax(magnitude, axis=0)].tolist() if magnitude.size > 0 else None,  # Peak frequency over time
+						"stft_num_peaks": spectral_peaks.get("num_peaks"),
+						"stft_peak_amplitude": spectral_peaks.get("peak_amplitude"),
+						"stft_dominant_frequency": spectral_peaks.get("dominant_frequency"),
+						"stft_positive_frequencies": spectral_peaks.get("positive_frequencies"),
+						"stft_positive_amplitudes": spectral_peaks.get("positive_amplitudes"),
+						"stft_snr_threshold": snr_threshold,
+						"stft_stationarity_threshold": stationarity_threshold,
+						"stft_window": window,
+						"stft_nperseg": nperseg,
+						"stft_noverlap": noverlap,
+						"stft_dynamic_cutoff": dynamic_cutoff,
+						"stft_dynamic_cutoff_percentile": cutoff_percentile,
+					}
+					# Track the best STFT result (e.g., highest spectral magnitude)
+					if best_result is None or result["stft_spectral_magnitude"] > best_result["stft_spectral_magnitude"]:
+						best_result = result
+
+	if verbose and best_result:
+		console.print(f"[green]Best STFT config: Window={best_result['stft_window']}, nperseg={best_result['stft_nperseg']}, SNR={best_result['stft_snr_threshold']}[/green]")
+
+	return best_result if best_result else None
+
+def calculate_fft(
+	tokens_signal: np.ndarray,
+	verbose: bool,
+	min_length: int = 16,
+	snr_thresholds: list = [3.0, 5.0, 7.0],  # Now iterating over SNR thresholds
+	stationarity_thresholds: list = [0.3, 0.5, 0.7]  # Iterating over stationarity thresholds
+) -> dict:
+	"""
+	Calculate the Fast Fourier Transform (FFT) of a given signal. This function first ensures the signal is suitable for FFT analysis
+	by validating its length, signal-to-noise ratio (SNR), and stationarity. If the signal passes these checks, the FFT is performed.
+
+	Parameters:
+	-----------
+	tokens_signal : np.ndarray
+		The signal to analyze.
+	verbose : bool
+		Whether to display verbose output.
+	min_length : int, optional
+		Minimum length of the signal for FFT analysis. Default is 16.
+	snr_thresholds : list, optional
+		List of signal-to-noise ratio (SNR) thresholds to test.
+	stationarity_thresholds : list, optional
+		List of stationarity thresholds to check power spectral density variations.
+
+	Returns:
+	--------
+	tuple:
+		- positive_amplitudes: np.ndarray or None
+		  Positive amplitudes of the signal if valid, otherwise None.
+		- positive_frequencies: np.ndarray or None
+		  Positive frequencies of the signal if valid, otherwise None.
+		- final_snr_threshold: float or None
+		  The final SNR threshold used for FFT analysis.
+		- final_stationarity_threshold: float or None
+		  The final stationarity threshold used for FFT analysis.
+	"""
+	# Check signal length
+	if len(tokens_signal) < min_length:
+		if verbose:
+			console.print(f"[yellow]Signal length ({len(tokens_signal)}) is too short for meaningful FFT analysis.[/yellow]")
+		return None # Return None if signal is too short
+
+	best_result = None
+
+	# Iterate over SNR and stationarity thresholds
+	for snr_threshold in snr_thresholds:
+		for stationarity_threshold in stationarity_thresholds:
+			# Compute Signal-to-Noise Ratio (SNR)
+			signal_power = np.mean(tokens_signal ** 2)
+			noise_power = np.mean((tokens_signal - np.mean(tokens_signal)) ** 2)
+			snr = 10 * np.log10(signal_power / (noise_power + 1e-6))  
+
+			if snr < snr_threshold:
+				if verbose:
+					console.print(f"[yellow]Low SNR ({snr:.2f} dB); FFT may not provide meaningful results (SNR threshold={snr_threshold}).[/yellow]")
+				continue  # Try the next combination
+
+			# Check stationarity
+			chunk_size = max(len(tokens_signal) // 4, 16)  # Ensure minimum chunk size
+			psd_variations = []
+			for i in range(0, len(tokens_signal), chunk_size):
+				chunk = tokens_signal[i:i + chunk_size]
+				chunk_fft = np.abs(fft(chunk))[:len(chunk) // 2]  # Positive amplitudes only
+				psd_variations.append(chunk_fft.sum())
+
+			# Add safeguard for std deviation (prevent division issues)
+			psd_variations_std = np.std(psd_variations)
+			psd_variations_mean = np.mean(psd_variations) + 1e-6  # Small epsilon to prevent divide by zero
+			if psd_variations_std > psd_variations_mean * stationarity_threshold:
+				if verbose:
+					console.print(f"[yellow]Signal shows significant non-stationarity; FFT results may be unreliable (Threshold={stationarity_threshold}).[/yellow]")
+				continue  # Try the next combination
+
+			# Perform FFT
+			tokens_fft = fft(tokens_signal)
+			frequencies = np.fft.fftfreq(len(tokens_fft))
+			positive_frequencies = frequencies[:len(frequencies) // 2]
+			positive_amplitudes = np.abs(tokens_fft[:len(tokens_fft) // 2])
+
+			# Compute spectral features from FFT
+			spectral_features = calculate_spectral_features(positive_amplitudes, positive_frequencies, verbose)
+
+			# Analyze spectral peaks
+			spectral_peaks = analyze_spectral_peaks(positive_amplitudes, positive_frequencies, verbose)
+
+			# Compute dynamic cutoff using the detected peak amplitude
+			dynamic_cutoff, cutoff_percentile = calculate_dynamic_cutoff(
+				tokens_signal=tokens_signal,
+				verbose=verbose,
+				peak_amplitude=spectral_peaks.get("peak_amplitude", 0)
+			)
+
+			result = {
+				"fft_frequency_max": spectral_features.get("frequency_max"),
+				"fft_amplitude_max": spectral_features.get("amplitude_max"),
+				"fft_spectral_centroid": spectral_features.get("spectral_centroid"),
+				"fft_spectral_bandwidth": spectral_features.get("spectral_bandwidth"),
+				"fft_spectral_magnitude": spectral_features.get("spectral_magnitude"),
+				"fft_variance_magnitude": np.var(positive_amplitudes),
+				"fft_num_peaks": spectral_peaks.get("num_peaks"),
+				"fft_peak_amplitude": spectral_peaks.get("peak_amplitude"),
+				"fft_dominant_frequency": spectral_peaks.get("dominant_frequency"),
+				"fft_positive_frequencies": spectral_peaks.get("positive_frequencies"),
+				"fft_positive_amplitudes": spectral_peaks.get("positive_amplitudes"),
+				"fft_snr_threshold": snr_threshold,
+				"fft_stationarity_threshold": stationarity_threshold,
+				"fft_dynamic_cutoff": dynamic_cutoff,
+				"fft_dynamic_cutoff_percentile": cutoff_percentile,
+			}
+
+			# Track the best FFT result (e.g., highest spectral magnitude)
+			if best_result is None or result["fft_spectral_magnitude"] > best_result["fft_spectral_magnitude"]:
+				best_result = result
+
+	return best_result if best_result else None
+	
 def detect_relative_peaks(
 	tokens_signal: np.ndarray,
 	prominence_values: list = [0.05, 0.1, 0.15],  # Iterating prominence thresholds
@@ -796,8 +747,6 @@ def log_metrics(metrics: dict, title: str):
 def calculate_signal_metrics(
 	tokens_signal: np.ndarray,
 	use_signal_type: str,
-	min_tokens: float,
-	prominence: float = None,
 	verbose: bool = True,
 ) -> dict:
 	"""
@@ -826,31 +775,14 @@ def calculate_signal_metrics(
 		return {}
 
 	# try:
+
 	# FFT Analysis
-	positive_amplitudes, positive_frequencies, snr_threshold, stationarity_threshold = calculate_fft(tokens_signal, verbose)
+	
 	fft_results = calculate_fft(tokens_signal, verbose)
-	fft_metrics = analyze_fft_peaks(
-		positive_amplitudes, positive_frequencies, verbose, min_peak_prominence=prominence or 0.01
-	)
 
-	fft_results = {
-		"dominant_frequency": fft_metrics.get("dominant_frequency"),
-		"amplitude_max": fft_metrics.get("peak_amplitude"),
-		"num_fft_peaks": fft_metrics.get("num_peaks"),
-		"positive_frequencies": positive_frequencies.tolist() if positive_frequencies is not None else [],
-		"positive_amplitudes": positive_amplitudes.tolist() if positive_amplitudes is not None else [],
-		"snr_threshold": snr_threshold,
-		"stationarity_threshold": stationarity_threshold,
-	}
-
-	# Dynamic Cutoff
-	dynamic_cutoff, cutoff_percentile = calculate_dynamic_cutoff(
-		tokens_signal=tokens_signal,
-		verbose=verbose,
-		peak_amplitude=fft_metrics.get("peak_amplitude", 0),
-		min_tokens=min_tokens,
-	)
-
+	# STFT Analysis
+	stft_results = calculate_stft(tokens_signal, verbose)
+	
 	# Relative Peaks
 	peak_metrics = detect_relative_peaks(
 		tokens_signal=tokens_signal,
@@ -879,29 +811,16 @@ def calculate_signal_metrics(
 	# Signal Envelope
 	envelope_metrics = calculate_signal_envelope(tokens_signal)
 
-	# Spectral Features
-	spectral_features = calculate_spectral_features(
-		positive_amplitudes=positive_amplitudes, positive_frequencies=positive_frequencies,
-		verbose=verbose
-	)
 
-	spectral_results = {
-		"spectral_magnitude": spectral_features.get("spectral_magnitude", 0.0),
-		"spectral_centroid": spectral_features.get("spectral_centroid"),
-		"spectral_bandwidth": spectral_features.get("spectral_bandwidth"),
-		"frequency_max": spectral_features.get("frequency_max"),
-	}
 
 	# Compile All Results
 	metrics = {
 		"signal_type": use_signal_type,
-		"dynamic_cutoff": dynamic_cutoff,
-		"dynamic_cutoff_percentile": cutoff_percentile,
 		**fft_results,
+		**stft_results,
 		**peak_results,
 		**autocorr_results,
 		**envelope_metrics,
-		**spectral_results,
 	}
 
 	# Logging

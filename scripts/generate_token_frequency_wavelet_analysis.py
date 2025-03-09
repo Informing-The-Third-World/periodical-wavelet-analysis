@@ -195,16 +195,10 @@ def compute_signal_metrics_for_raw_and_smoothed(
             # If signal is None, skip to avoid errors
             continue
 
-        # Calculate the minimum tokens from merged_expanded_df if needed
-        min_tokens = merged_expanded_df['tokens_per_page'].min() if 'tokens_per_page' in merged_expanded_df.columns else 1
-
         # Call your existing metric function
         result = calculate_signal_metrics(
             tokens_signal=signal,
             use_signal_type=signal_type,
-            min_tokens=min_tokens,
-            prominence=prominence,
-            distance=distance,
             verbose=verbose
         )
         # Append result for each signal (raw or smoothed)
