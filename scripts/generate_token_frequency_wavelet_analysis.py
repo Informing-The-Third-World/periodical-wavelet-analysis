@@ -104,6 +104,7 @@ def ensure_stationarity_for_signals(
 
 def compute_signal_metrics_for_raw_and_smoothed(
 	tokens_raw_signal: np.ndarray,
+	tokens_smoothed_signal: np.ndarray,
 	signal_data: dict,
 	verbose: bool = False
 ) -> pd.DataFrame:
@@ -165,6 +166,50 @@ def compute_signal_metrics_for_raw_and_smoothed(
 	# Combine them horizontally
 	combined_metrics_df = pd.concat([signal_data_df, signal_metrics_df], axis=1)
 	return combined_metrics_df
+
+def select_best_signal_version(original_df: pd.DataFrame, processed_df: pd.DataFrame, threshold: float = 0.3) -> pd.DataFrame:
+    """
+    Decide whether to use the original or processed signal for analysis.
+    Uses a threshold to determine if preprocessing changed the signal too much.
+
+    Parameters
+    ----------
+    original_df : pd.DataFrame
+        DataFrame containing metrics for the original signal.
+    processed_df : pd.DataFrame
+        DataFrame containing metrics for the processed signal.
+    threshold : float, optional
+        Maximum allowed relative change before reverting to original. Default is 0.3 (30%).
+
+    Returns
+    -------
+    selected_df : pd.DataFrame
+        DataFrame containing the best signal metrics for downstream analysis.
+        Includes a 'selected_version' column indicating whether each value came from 'original' or 'processed'.
+    """
+    # Ensure we only compare numeric columns
+    numeric_cols = original_df.select_dtypes(include=[np.number]).columns
+    original_numeric = original_df[numeric_cols]
+    processed_numeric = processed_df[numeric_cols]
+
+    # Compute absolute and relative differences
+    delta_df = (processed_numeric - original_numeric).abs()
+    relative_change_df = delta_df / (original_numeric.abs() + 1e-6)  # Avoid divide by zero
+
+    # Decide which value to keep per column
+    selection_mask = relative_change_df < threshold  # True = use processed, False = use original
+
+    # Select values based on the mask
+    selected_df = original_numeric.where(~selection_mask, processed_numeric)
+
+    # Track selection sources
+    selection_info = pd.DataFrame("original", index=original_df.index, columns=numeric_cols)
+    selection_info[selection_mask] = "processed"
+
+    # Append selection info
+    selected_df["selected_version"] = selection_info.mode(axis=1)[0]  # Mode ensures a single label per row
+
+    return selected_df
 
 ## WAVELET RANKING AND COMPARISON FUNCTIONS
 def filter_wavelets(wavelets: list, exclude_complex: bool = True) -> list:
@@ -482,7 +527,7 @@ def compare_and_rank_wavelet_metrics(
 	return subset_all_combined[0:1]
 
 ## MAIN FUNCTIONS
-def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: str, should_use_parallel: bool, rerun_data: bool, max_lag: int = 10, significance_level: float = 0.05) -> pd.DataFrame:
+def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: str, should_use_parallel: bool, rerun_data: bool) -> pd.DataFrame:
 	"""
 	Generate embeddings for each volume in the given DataFrame.
 
@@ -523,25 +568,52 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 		console.print(f"Wavelet analysis directory: {wavelet_analysis_dir}", style="chartreuse1")
 
 		# Ensure stationarity for signals
-		tokens_raw_signal, tokens_smoothed_signal, wavelet_transform_settings, skip_analysis, signal_data = ensure_stationarity_for_signals(
+		processed_tokens_raw_signal, processed_tokens_smoothed_signal, wavelet_transform_settings, skip_analysis, signal_data = ensure_stationarity_for_signals(
 			tokens_raw_signal, tokens_smoothed_signal
 		)
 
 		if skip_analysis:
 			console.print("[red]Skipping wavelet analysis due to error with token signal.[/red]")
 			continue
-		# Compute signal metrics for raw and smoothed signals
-		signal_metrics_df = compute_signal_metrics_for_raw_and_smoothed(
-			tokens_raw_signal, tokens_smoothed_signal, merged_expanded_df, signal_data
-		)
-		# Calculate wavelet metrics and signal metrics
-		best_wavelet_config = compare_and_rank_wavelet_metrics(
-			tokens_raw_signal, tokens_smoothed_signal, wavelet_analysis_dir, volume['htid'], signal_metrics_df, wavelet_transform_settings, should_use_parallel
-		)
+		# Check if processed signals differ from original signals
+		raw_signal_changed = not np.array_equal(tokens_raw_signal, processed_tokens_raw_signal)
+		smoothed_signal_changed = not np.array_equal(tokens_smoothed_signal, processed_tokens_smoothed_signal)
+
+		if raw_signal_changed or smoothed_signal_changed:
+			console.print("[yellow]Processed signal differs from original. Computing both for comparison.[/yellow]")
+
+			# Compute metrics for original and processed signals
+			original_signal_metrics_df = compute_signal_metrics_for_raw_and_smoothed(
+				tokens_raw_signal, tokens_smoothed_signal, signal_data, verbose=False
+			)
+			processed_signal_metrics_df = compute_signal_metrics_for_raw_and_smoothed(
+				processed_tokens_raw_signal, processed_tokens_smoothed_signal, signal_data, verbose=False
+			)
+
+			# Select the best signal version based on metrics
+			finalized_signal_metrics_df = select_best_signal_version(original_signal_metrics_df, processed_signal_metrics_df)
+
+			# Determine which signal to use
+			use_original = finalized_signal_metrics_df.selected_version.iloc[0] == "original"
+			selected_tokens_raw_signal = tokens_raw_signal if use_original else processed_tokens_raw_signal
+			selected_tokens_smoothed_signal = tokens_smoothed_signal if use_original else processed_tokens_smoothed_signal
+
+			console.print(f"[cyan]Using {'original' if use_original else 'processed'} signal for wavelet analysis.[/cyan]")
+		else:
+			console.print("[green]Processed signal is identical to original. Using original signal only.[/green]")
+			finalized_signal_metrics_df = compute_signal_metrics_for_raw_and_smoothed(
+				tokens_raw_signal, tokens_smoothed_signal, signal_data, verbose=False
+			)
+			selected_tokens_raw_signal = tokens_raw_signal
+			selected_tokens_smoothed_signal = tokens_smoothed_signal
 		
+		# Calculate wavelet metrics and signal metrics using the selected signals
+		best_wavelet_config = compare_and_rank_wavelet_metrics(
+			selected_tokens_raw_signal, selected_tokens_smoothed_signal, wavelet_analysis_dir, volume['htid'], finalized_signal_metrics_df, wavelet_transform_settings, should_use_parallel
+		)
 		# Separate raw and smoothed signals
-		raw_signals = signal_metrics_df[signal_metrics_df.signal_type == 'raw'].drop(columns=['signal_type'])
-		smoothed_signals = signal_metrics_df[signal_metrics_df.signal_type == 'smoothed'].drop(columns=['signal_type'])
+		raw_signals = finalized_signal_metrics_df[finalized_signal_metrics_df.signal_type == 'raw'].drop(columns=['signal_type'])
+		smoothed_signals = finalized_signal_metrics_df[finalized_signal_metrics_df.signal_type == 'smoothed'].drop(columns=['signal_type'])
 
 		# Rename columns to include the signal_type
 		raw_signals.columns = [f"raw_{col}" for col in raw_signals.columns]
