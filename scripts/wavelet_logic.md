@@ -23,7 +23,7 @@ Before applying wavelet transformations, we check if the token frequency signal 
 
 #### **Stationarity Tests and Their Interpretation**
 
-We use two complementary statistical tests to assess stationarity:
+We use the following statistical tests to assess stationarity:
 
 - **Augmented Dickey-Fuller (ADF) Test**:  
   - Checks if a signal has a **unit root**, which indicates non-stationarity.
@@ -35,12 +35,21 @@ We use two complementary statistical tests to assess stationarity:
   - If the **p-value is significant** (≤ `0.05`), the signal is **non-stationary**.
   - If the **p-value is not significant**, the signal **is stationary** and does not contain deterministic trends.
 
+- **Autocorrelation Test**:
+  - Checks for autocorrelation in the signal, which is a measure of how similar a signal is to a lagged version of itself (i.e., how much the past predicts the future).
+  - High autocorrelation at multiple lags suggests the signal is persistent and likely non-stationary (e.g., periodic or slowly changing signals). Low autocorrelation across all tested lags suggests the signal fluctuates randomly, meaning it is likely stationary. To put it more plainly, if we were sampling data from the future to predict the past, then we would expect a low autocorrelation score if the data is very similar across time. If the data is very different across time, then we would expect a high autocorrelation score.
+
 **Interpreting the Combined Results:**
 
-- **ADF significant & KPSS not significant → Signal is stationary.**
-- **ADF not significant & KPSS significant → Signal is non-stationary.**
-- **Both significant → Potential trend-stationarity, requiring further preprocessing.**
-- **Both not significant → Likely stationary, but may require additional confirmation.**
+To determine stationarity, we combine insights from ADF, KPSS, and autocorrelation:
+
+| **ADF Test** | **KPSS Test** | **Autocorrelation** | **Conclusion** |
+|-------------|-------------|-------------------|---------------|
+| ✅ Significant (p ≤ 0.05) | ❌ Not significant | **Low at all lags** (≤ 0.1) | **Stationary** |
+| ❌ Not significant | ✅ Significant (p ≤ 0.05) | **High at all lags** (≥ 0.8) | **Non-stationary** |
+| ✅ Significant | ✅ Significant | **Varied** | **Trend-stationary (may require detrending)** |
+| ❌ Not significant | ❌ Not significant | **Low at all lags** (≤ 0.1) | **Stationary (confirmed by low autocorrelation)** |
+| ❌ Not significant | ❌ Not significant | **High at all lags** (≥ 0.8) | **Likely non-stationary (suggests persistence)** |
 
 ---
 
@@ -53,9 +62,14 @@ Since stationarity assessments can be sensitive to parameter choices, we test ac
   - We evaluate the signal at **multiple lags**, ensuring that results are not sensitive to a single choice.
   - The best `max_lag` yielding stationarity is recorded.
 
+- **Evaluating Autocorrelation Across Lags (`max_lag=[1, 5, 10]`)**:  
+  - We assess autocorrelation at multiple lags to ensure consistent stationarity results.
+  - If we have high autocorrelaiton across all lags, then we are likely dealing with a non-stationary signal. If we have low autocorrelation across all lags, then we are likely dealing with a stationary signal.
+
 - **Returning Detailed Interpretations**:  
   - Each test result includes an explanation of the statistical decision.
   - If different `max_lag` values produce different results, the most stationary-friendly result is used.
+  - If ADF and KPSS tests disagree, we use autocorrelation to resolve the conflict.
 
 ---
 
@@ -92,8 +106,13 @@ The stationarity checks and preprocessing are handled in:
 
 - `check_wavelet_stationarity()`:  
   - Runs **ADF and KPSS tests** across multiple `max_lag` values.
+  - Computes **autocorrelation** to resolve conflicting results at multiple lags.
   - Returns the **best configuration** that confirms stationarity.
 
+- `calculate_autocorrelation()`:  
+  - Computes the **autocorrelation** of a signal at a given lags. This helps assess signal persistence and stationarity.
+  - Returns correlation strength, which helps determine periodicity and stationarity.
+  
 - `apply_differencing()` & `apply_detrending()`:  
   - Apply transformations if the signal is non-stationary.
 
