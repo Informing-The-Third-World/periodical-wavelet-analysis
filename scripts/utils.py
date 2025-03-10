@@ -1,6 +1,6 @@
 import os
 import pandas as pd
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import apikey
 import altair as alt
 import vl_convert as vlc
@@ -368,9 +368,9 @@ def process_file(file_path: str, is_preidentified_periodical: bool, should_filte
 	return expanded_df, subset_digits, grouped_df
 
 ## DATA PROCESSING FUNCTIONS
-def find_best_window_size(signal: np.ndarray, min_window: int = 3, max_window: int = 15) -> int:
+def find_best_smoothing_window(signal: np.ndarray, min_window: int = 3, max_window: int = 15, fixed_window: int = 5) -> int:
     """
-    Determine the optimal moving average window size for smoothing a signal.
+    Determine the optimal moving average window size by comparing fixed and dynamic approaches.
 
     Parameters:
     ----------
@@ -380,28 +380,36 @@ def find_best_window_size(signal: np.ndarray, min_window: int = 3, max_window: i
         The minimum window size to test.
     max_window : int, optional
         The maximum window size to test.
+    fixed_window : int, optional
+        The fixed window size used for comparison.
 
     Returns:
     -------
-    int
-        The best window size based on variance reduction.
+    int:
+        The best window size to use for smoothing.
     """
     best_window = min_window
     best_criteria = float('inf')
 
+    # Fixed smoothing signal
+    fixed_smoothed = pd.Series(signal).rolling(window=fixed_window, center=True).mean().fillna(0).to_numpy()
+    fixed_variance_reduction = np.var(signal) - np.var(fixed_smoothed)
+    fixed_smoothness = 1 / (1 + np.mean(np.abs(np.diff(fixed_smoothed, n=2))))
+    fixed_combined_score = fixed_variance_reduction - fixed_smoothness
+
     for window in range(min_window, max_window + 1, 2):  # Ensure odd windows for symmetry
-        smoothed_signal = pd.Series(signal).rolling(window=window, center=True).mean().fillna(0).to_numpy()
-        variance_reduction = np.var(signal) - np.var(smoothed_signal)
-        smoothness = 1 / (1 + np.mean(np.abs(np.diff(smoothed_signal, n=2))))  # Second-order difference
+        dynamic_smoothed = pd.Series(signal).rolling(window=window, center=True).mean().fillna(0).to_numpy()
+        dynamic_variance_reduction = np.var(signal) - np.var(dynamic_smoothed)
+        dynamic_smoothness = 1 / (1 + np.mean(np.abs(np.diff(dynamic_smoothed, n=2))))
+        dynamic_combined_score = dynamic_variance_reduction - dynamic_smoothness
 
-        # Combine metrics to select best window (higher variance reduction, smoother signal)
-        combined_score = variance_reduction - smoothness
-
-        if combined_score < best_criteria:
-            best_criteria = combined_score
+        # Compare combined scores
+        if dynamic_combined_score < best_criteria:
+            best_criteria = dynamic_combined_score
             best_window = window
 
-    return best_window
+    # Return the fixed window size if it performs better
+    return fixed_window if fixed_combined_score <= best_criteria else best_window
 
 
 def process_tokens(file_path: str, preidentified_periodical: bool, should_filter_greater_than_numbers: bool, should_filter_implied_zeroes: bool) -> tuple:
@@ -466,7 +474,7 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 	merged_expanded_df = merged_expanded_df.sort_values(by='page_number')
 
 	# Determine the best window size dynamically
-	best_window_size = find_best_window_size(merged_expanded_df['tokens_per_page'].values)
+	best_window_size = find_best_smoothing_window(merged_expanded_df['tokens_per_page'].values)
 	
 	# Apply smoothing (moving average) using dynamic window size
 	merged_expanded_df['smoothed_tokens_per_page'] = (
@@ -476,11 +484,6 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 		.mean()
 		.fillna(0)
 	)
-	# Standardize smoothed signals
-	merged_expanded_df['standardized_tokens_per_page'] = (
-		(merged_expanded_df['smoothed_tokens_per_page'] - merged_expanded_df['smoothed_tokens_per_page'].mean()) 
-		/ merged_expanded_df['smoothed_tokens_per_page'].std()
-	)
 	# Apply smoothing for digits per page using the same best window size
 	merged_expanded_df['smoothed_digits_per_page'] = (
 		merged_expanded_df['digits_per_page']
@@ -489,13 +492,8 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 		.mean()
 		.fillna(0)
 	)
-
-	merged_expanded_df['standardized_digits_per_page'] = (
-		(merged_expanded_df['smoothed_digits_per_page'] - merged_expanded_df['smoothed_digits_per_page'].mean()) 
-		/ merged_expanded_df['smoothed_digits_per_page'].std()
-	)
 	
-	table_cols = ['page_number', 'tokens_per_page', 'smoothed_tokens_per_page', 'standardized_tokens_per_page', 'digits_per_page', 'smoothed_digits_per_page', 'standardized_digits_per_page'] 
+	table_cols = ['page_number', 'tokens_per_page', 'smoothed_tokens_per_page', 'digits_per_page', 'smoothed_digits_per_page'] 
 	table_title = "Token and Digit Data"
 	generate_table(merged_expanded_df[table_cols].head(2), table_title)
 	
@@ -513,9 +511,10 @@ def process_tokens(file_path: str, preidentified_periodical: bool, should_filter
 	# Normalize signals for FFT and autocorrelation
 	tokens_raw_signal = np.nan_to_num(merged_expanded_df['tokens_per_page'].values, nan=0.0, posinf=0.0, neginf=0.0)
 	tokens_smoothed_signal = np.nan_to_num(merged_expanded_df['smoothed_tokens_per_page'].values, nan=0.0, posinf=0.0, neginf=0.0)
-	(tokens_raw_signal)
+	
 	console.print(f"Raw Signal Length: {len(tokens_raw_signal)}", style="bright_green")
 	console.print(f"Smoothed Signal Length: {len(tokens_smoothed_signal)}", style="bright_green")
+	
 	return merged_expanded_df, grouped_df, tokens_raw_signal, tokens_smoothed_signal, best_window_size
 
 def check_if_actual_issue(row: pd.Series, grouped_df: pd.DataFrame) -> bool:

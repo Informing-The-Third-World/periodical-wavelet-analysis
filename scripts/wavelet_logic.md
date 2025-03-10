@@ -9,7 +9,8 @@ This project applies wavelet transformations to analyze token frequency signals 
 The first step is extracting token frequency signals from periodical text. This is handled in:
 
 - `generate_signal_processing_data()`: Loads periodical data and prepares it for token extraction. The function is in the `generate_token_frequency_wavelet_analysis.py` script. It is the main entry point for processing periodicals.
-- `process_tokens()`: Extracts raw and smoothed token frequency signals to capture overall trends while reducing noise. The function is in the `utils.py` script.
+- `process_tokens()`: Extracts raw and smoothed token frequency signals to capture overall trends while reducing noise. The function is in the `utils.py` script. 
+- `find_best_smoothing_window()`: To generate the smoothed token frequency, we determine the **optimal window size** for moving average smoothing. We compare a **fixed window size** (default = 5) with **dynamic window sizes** ranging from `min_window` to `max_window`. We select the window size that achieves the best balance of variance reduction and smoothness. The function is in the `utils.py` script.
 
 ### 2. Stationarity Testing
 
@@ -449,7 +450,7 @@ We also have some particular nomenclature conventions:
 - **`_all_` vs. `_across_`**: The `ALL` prefix in filenames indicates that results include all signal types and wavelets, while the `ACROSS` prefix indicates that results include only across signal types but not across wavelets.
 - **`_full_` vs. `_subset_`**: The `FULL` prefix indicates that results include all wavelet transformations, while the `SUBSET` prefix indicates that results include only the top N% of wavelet transformations.
 
-Since some of our periodicals do not meet the stationarity test or might produce errors, we record all skipped results in the `raw_results/` and `smoothed_results/` directory. We only create the initial wavelet representations at this stage of within the wavelet family and signal type. We then continue to re-rank them with the `across_` or `all_` results, giving us three stages of ranks: 
+Since some of our periodicals do not meet the stationarity test or might produce errors, we record all skipped results in the `raw_results/` and `smoothed_results/` directory. We only create the initial wavelet representations at this stage of within the wavelet family and signal type. We then continue to re-rank them with the `across_` or `all_` results, giving us three stages of ranks:
 
 1. **Within Wavelet Family and Signal Type**: This is the initial ranking of wavelets within each family and signal type. It is saved in the `raw_results/` and `smoothed_results/` directory.
 2. **Across Signal Types**: This is the ranking of wavelets across all signal types within each wavelet family. It is saved in the `DWT_results/`, `CWT_results/`, and `SWT_results/` directory.

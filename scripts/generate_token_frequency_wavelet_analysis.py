@@ -45,7 +45,7 @@ def convert_to_native_types(obj):
 def ensure_stationarity_for_signals(
 	tokens_raw_signal: np.ndarray,
 	tokens_smoothed_signal: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray, dict, bool, dict]:
+) -> Tuple[np.ndarray, np.ndarray, dict, bool]:
 	"""
 	Checks stationarity for raw and smoothed signals. If non-stationary, attempts preprocessing. If preprocessing fails, skips wavelet analysis.
 
@@ -62,12 +62,10 @@ def ensure_stationarity_for_signals(
 		Preprocessed raw signal.
 	tokens_smoothed_signal : np.ndarray
 		Preprocessed smoothed signal.
-	wavelet_transform_settings : dict
-		Settings for wavelet transforms.
+	stationarity_results : dict
+		Settings for wavelet transforms and stationarity results.
 	skip_analysis : bool
 		Whether to skip wavelet analysis.
-	signal_data : dict
-		Stationarity results for raw and smoothed signals.
 	"""
 
 	console.print("[cyan]Checking stationarity for raw and smoothed signals...[/cyan]")
@@ -78,34 +76,31 @@ def ensure_stationarity_for_signals(
 	processed_smoothed_signal, smoothed_stationarity_result = preprocess_signal_for_stationarity(tokens_smoothed_signal, signal_type="smoothed")
 
 	# 3. Construct wavelet transform settings
-	wavelet_transform_settings = {
+	stationarity_results = {
 		"raw": {
 			"is_stationary": raw_stationarity_result["is_stationary"],
-			"original_signal": raw_stationarity_result["transformation"] == "Original"
+			"original_signal": raw_stationarity_result["transformation"] == "Original",
+			**raw_stationarity_result  # Merges all stationarity results
 		},
 		"smoothed": {
 			"is_stationary": smoothed_stationarity_result["is_stationary"],
-			"original_signal": smoothed_stationarity_result["transformation"] == "Original"
+			"original_signal": smoothed_stationarity_result["transformation"] == "Original",
+			**smoothed_stationarity_result  # Merges all stationarity results
 		},
 	}
 
 	# 4. Determine if wavelet analysis should be skipped
 	skip_analysis = processed_raw_signal is None and processed_smoothed_signal is None
 
-	# 5. Dynamically add "raw_" and "smoothed_" prefixes to signal data
-	signal_data = {
-		**{f"raw_{key}": value for key, value in raw_stationarity_result.items()},
-		**{f"smoothed_{key}": value for key, value in smoothed_stationarity_result.items()}
-	}
 
 	console.print("[cyan]Completed stationarity checks and preprocessing.[/cyan]")
 
-	return processed_raw_signal, processed_smoothed_signal, wavelet_transform_settings, skip_analysis, signal_data
+	return processed_raw_signal, processed_smoothed_signal, stationarity_results, skip_analysis
 
 def compute_signal_metrics_for_raw_and_smoothed(
 	tokens_raw_signal: np.ndarray,
 	tokens_smoothed_signal: np.ndarray,
-	signal_data: dict,
+	stationarity_data: dict,
 	verbose: bool = False
 ) -> pd.DataFrame:
 	"""
@@ -117,14 +112,8 @@ def compute_signal_metrics_for_raw_and_smoothed(
 		The raw token-based signal.
 	tokens_smoothed_signal : np.ndarray
 		The smoothed token-based signal.
-	merged_expanded_df : pd.DataFrame
-		DataFrame containing page-level data from which we can derive min_tokens or other fields.
-	signal_data : dict
-		A dictionary of metadata (e.g., volume data) to include in the final DataFrame.
-	prominence : float, optional
-		Used by calculate_signal_metrics.
-	distance : int, optional
-		Used by calculate_signal_metrics.
+	stationarity_data : dict
+		Dictionary containing metadata about the signal, including stationarity results.
 	verbose : bool, optional
 		Whether to print debugging info in calculate_signal_metrics.
 
@@ -155,16 +144,24 @@ def compute_signal_metrics_for_raw_and_smoothed(
 			verbose=verbose
 		)
 		# Append result for each signal (raw or smoothed)
+		if 'signal_type' not in result:
+			result['signal_type'] = signal_type	
 		signal_metrics_results.append(result)
 
 	# Convert to DataFrame
 	signal_metrics_df = pd.DataFrame(signal_metrics_results)
 
 	# Also convert 'signal_data' dict to a one-row DataFrame for merging
-	signal_data_df = pd.DataFrame([signal_data])
+	stationarity_data_df = pd.DataFrame.from_dict(stationarity_data, orient="index").reset_index()
+	stationarity_data_df = stationarity_data_df.rename(columns={"index": "signal_type"})
 
 	# Combine them horizontally
-	combined_metrics_df = pd.concat([signal_data_df, signal_metrics_df], axis=1)
+	combined_metrics_df = pd.merge(
+		signal_metrics_df,
+		stationarity_data_df,
+		on="signal_type",
+		how="outer"
+	)
 	return combined_metrics_df
 
 def select_best_signal_version(original_df: pd.DataFrame, processed_df: pd.DataFrame, threshold: float = 0.3) -> pd.DataFrame:
@@ -568,7 +565,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 		console.print(f"Wavelet analysis directory: {wavelet_analysis_dir}", style="chartreuse1")
 
 		# Ensure stationarity for signals
-		processed_tokens_raw_signal, processed_tokens_smoothed_signal, wavelet_transform_settings, skip_analysis, signal_data = ensure_stationarity_for_signals(
+		processed_tokens_raw_signal, processed_tokens_smoothed_signal, stationarity_data_settings, skip_analysis = ensure_stationarity_for_signals(
 			tokens_raw_signal, tokens_smoothed_signal
 		)
 
@@ -576,18 +573,18 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 			console.print("[red]Skipping wavelet analysis due to error with token signal.[/red]")
 			continue
 		# Check if processed signals differ from original signals
-		raw_signal_changed = not np.array_equal(tokens_raw_signal, processed_tokens_raw_signal)
-		smoothed_signal_changed = not np.array_equal(tokens_smoothed_signal, processed_tokens_smoothed_signal)
+		raw_signal_changed = not np.allclose(tokens_raw_signal, processed_tokens_raw_signal, atol=1e-6)
+		smoothed_signal_changed = not np.allclose(tokens_smoothed_signal, processed_tokens_smoothed_signal, atol=1e-6)
 
 		if raw_signal_changed or smoothed_signal_changed:
 			console.print("[yellow]Processed signal differs from original. Computing both for comparison.[/yellow]")
 
 			# Compute metrics for original and processed signals
 			original_signal_metrics_df = compute_signal_metrics_for_raw_and_smoothed(
-				tokens_raw_signal, tokens_smoothed_signal, signal_data, verbose=False
+				tokens_raw_signal, tokens_smoothed_signal, stationarity_data_settings, verbose=False
 			)
 			processed_signal_metrics_df = compute_signal_metrics_for_raw_and_smoothed(
-				processed_tokens_raw_signal, processed_tokens_smoothed_signal, signal_data, verbose=False
+				processed_tokens_raw_signal, processed_tokens_smoothed_signal, stationarity_data_settings, verbose=False
 			)
 
 			# Select the best signal version based on metrics
@@ -602,14 +599,14 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 		else:
 			console.print("[green]Processed signal is identical to original. Using original signal only.[/green]")
 			finalized_signal_metrics_df = compute_signal_metrics_for_raw_and_smoothed(
-				tokens_raw_signal, tokens_smoothed_signal, signal_data, verbose=False
+				tokens_raw_signal, tokens_smoothed_signal, stationarity_data_settings, verbose=False
 			)
 			selected_tokens_raw_signal = tokens_raw_signal
 			selected_tokens_smoothed_signal = tokens_smoothed_signal
 		
 		# Calculate wavelet metrics and signal metrics using the selected signals
 		best_wavelet_config = compare_and_rank_wavelet_metrics(
-			selected_tokens_raw_signal, selected_tokens_smoothed_signal, wavelet_analysis_dir, volume['htid'], finalized_signal_metrics_df, wavelet_transform_settings, should_use_parallel
+			selected_tokens_raw_signal, selected_tokens_smoothed_signal, wavelet_analysis_dir, volume['htid'], finalized_signal_metrics_df, stationarity_data_settings, should_use_parallel
 		)
 		# Separate raw and smoothed signals
 		raw_signals = finalized_signal_metrics_df[finalized_signal_metrics_df.signal_type == 'raw'].drop(columns=['signal_type'])

@@ -18,6 +18,7 @@ from skimage.metrics import peak_signal_noise_ratio as psnr
 # Local application imports
 sys.path.append("..")
 from scripts.generate_wavelet_signal_features import *
+from scripts.generate_wavelet_stationarity import check_wavelet_stationarity
 
 # Disable max rows for Altair
 alt.data_transformers.disable_max_rows()
@@ -214,6 +215,7 @@ def process_dwt_wavelet(signal: np.ndarray, wavelet: str, modes: list, signal_ty
 			raise ValueError(f"Signal is too short for wavelet {wavelet}")
 
 		max_level = pywt.dwt_max_level(len(signal), wavelet_filter_len)
+
 		for level in range(1, max_level + 1):
 			for mode in modes:
 				# Check compatibility
@@ -231,6 +233,22 @@ def process_dwt_wavelet(signal: np.ndarray, wavelet: str, modes: list, signal_ty
 					coeffs = pywt.wavedec(signal, wavelet, level=level, mode=mode)
 					reconstructed_signal = pywt.waverec(coeffs, wavelet, mode=mode)[:len(signal)]
 
+					# Post-wavelet stationarity check
+					stationarity_after = check_wavelet_stationarity(reconstructed_signal, signal_type)
+					is_stationary_after = stationarity_after["is_stationary"]
+
+					if not is_stationary_after:
+						console.print(f"Stationarity changed from initially True to afterwards {is_stationary_after} for wavelet {wavelet}, level {level}, mode {mode} after decomposition. Skipping wavelet...", style="yellow")
+						skipped_wavelets.append({
+							'wavelet': wavelet,
+							'wavelet_level': level,
+							'wavelet_mode': mode,
+							'error': "Stationarity changed after decomposition",
+							'signal_length': len(signal),
+							'signal_type': signal_type
+						})
+						continue
+
 					mse = np.mean((signal - reconstructed_signal) ** 2)
 					psnr_value = psnr(signal, reconstructed_signal, data_range=np.max(signal) - np.min(signal))
 					energy_entropy = energy_entropy_ratio(coeffs)
@@ -243,9 +261,6 @@ def process_dwt_wavelet(signal: np.ndarray, wavelet: str, modes: list, signal_ty
 					reconstructed_signal_metrics = calculate_signal_metrics(
 						tokens_signal=reconstructed_signal,
 						use_signal_type=f"{signal_type}",
-						min_tokens=np.min(signal),
-						prominence=0.1 * np.std(reconstructed_signal),
-						distance=max(1, len(reconstructed_signal) // 20),
 						verbose=False
 					)
 
@@ -271,7 +286,8 @@ def process_dwt_wavelet(signal: np.ndarray, wavelet: str, modes: list, signal_ty
 						'wavelet_level': level,
 						'wavelet_mode': mode,
 						'error': str(e),
-						'signal_length': len(signal)
+						'signal_length': len(signal),
+						'signal_type': signal_type
 					})
 	except Exception as e:
 		skipped_wavelets.append({'wavelet': wavelet, 'error': str(e)})
@@ -430,9 +446,6 @@ def process_cwt_wavelet(signal: np.ndarray, wavelet: str, scales: np.ndarray, si
 		reconstructed_signal_metrics = calculate_signal_metrics(
 			tokens_signal=reconstructed_signal,
 			use_signal_type=f"{signal_type}",
-			min_tokens=np.min(signal),
-			prominence=0.1 * np.std(reconstructed_signal),
-			distance=max(1, len(reconstructed_signal) // 20),
 			verbose=False
 		)
 		# Append Results
@@ -592,6 +605,21 @@ def process_swt_wavelet(signal: np.ndarray, wavelet: str, signal_type: str, max_
 		# Reconstruct and trim signal to original length
 		reconstructed_signal = np.sum([approx_coeffs[-1]] + list(detail_coeffs), axis=0)[:len(signal)]
 
+		# Post-wavelet stationarity check
+		stationarity_after = check_wavelet_stationarity(reconstructed_signal, signal_type)
+		is_stationary_after = stationarity_after["is_stationary"]
+
+		if not is_stationary_after:
+			console.print(f"Stationarity changed from initially True to afterwards {is_stationary_after} for wavelet {wavelet} after decomposition. Skipping wavelet...", style="yellow")
+			skipped_results.append({
+				'wavelet': wavelet,
+				'error': "Stationarity changed after decomposition",
+				'signal_length': len(signal),
+				'signal_type': signal_type,
+				'decomposition_levels': max_level
+			})
+			return results, skipped_results
+
 		# Compute PSNR
 		wavelet_psnr = psnr(signal, reconstructed_signal, data_range=np.max(signal) - np.min(signal))
 
@@ -617,9 +645,6 @@ def process_swt_wavelet(signal: np.ndarray, wavelet: str, signal_type: str, max_
 		reconstructed_signal_metrics = calculate_signal_metrics(
 			tokens_signal=reconstructed_signal,
 			use_signal_type=f"{signal_type}",
-			min_tokens=np.min(signal),
-			prominence=0.1 * np.std(reconstructed_signal),
-			distance=max(1, len(reconstructed_signal) // 20),
 			verbose=False
 		)
 
