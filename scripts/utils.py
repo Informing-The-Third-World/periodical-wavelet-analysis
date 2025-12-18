@@ -370,7 +370,19 @@ def process_file(file_path: str, is_preidentified_periodical: bool, should_filte
 ## DATA PROCESSING FUNCTIONS
 def find_best_smoothing_window(signal: np.ndarray, min_window: int = 3, max_window: int = 15, fixed_window: int = 5) -> int:
     """
-    Determine the optimal moving average window size by comparing fixed and dynamic approaches.
+    Select an appropriate moving-average window size for smoothing a token-frequency signal.
+
+    This function evaluates a range of *odd-sized* moving-average windows and compares them
+    against a fixed baseline window. Window quality is assessed using a composite criterion
+    that balances:
+
+    (1) Variance reduction (how much noise is removed), and
+    (2) Signal smoothness, measured via the mean absolute second derivative.
+
+    The goal is to reduce high-frequency noise while preserving meaningful structural
+    variation (e.g., issue boundaries). The fixed window acts as a conservative baseline;
+    a dynamic window is only selected if it improves upon the fixed window according to
+    the combined criterion.
 
     Parameters:
     ----------

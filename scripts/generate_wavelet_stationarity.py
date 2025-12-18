@@ -188,9 +188,17 @@ def check_wavelet_stationarity(
 			final_interpretation = interpretation
 
 	# If both tests are non-significant but autocorrelation is low, consider the signal stationary
-	if all(autocorr_values[lag] < autocorr_threshold for lag in autocorr_lags):
-		interpretation = f"Autocorrelation ({autocorr_values:.4f}) suggests stationarity despite weak ADF/KPSS results." if final_interpretation is None else final_interpretation + f" (autocorrelation={autocorr_values:.4f}) and below threshold. Therefore, signal is stationary."
-		console.print(f"[green]{interpretation}[/green]")
+	if all(abs(autocorr_values[lag]) < autocorr_threshold for lag in autocorr_lags):
+		# Check if the maximum autocorrelation value is below the threshold
+		if isinstance(autocorr_values, dict):
+			max_autocorr = max(abs(v) for v in autocorr_values.values())
+		else:
+			max_autocorr = abs(autocorr_values)
+		interpretation = (
+			f"Autocorrelation (max={max_autocorr:.4f}) suggests stationarity despite weak ADF/KPSS results."
+			if final_interpretation is None
+			else final_interpretation + f" (max autocorrelation={max_autocorr:.4f}, below threshold). Therefore, signal is stationary."
+		)
 		return {
 			"is_stationary": True,
 			"best_max_lag": None,
@@ -199,7 +207,10 @@ def check_wavelet_stationarity(
 			"adf_statistic": adf_stat,
 			"kpss_statistic": kpss_stat,
 			"interpretation": interpretation,
-			"autocorrelation": autocorr_values
+			"autocorrelation": autocorr_values,
+			"autocorrelation_threshold": autocorr_threshold,
+			"max_autocorrelation": max_autocorr,
+			"lags_tested": list(autocorr_values.keys()) if isinstance(autocorr_values, dict) else None,
 		}
 	# If no stationary result was found, return the last tested result
 	console.print("[red]Signal remains non-stationary for all max_lag values tested.[/red]")
@@ -211,7 +222,10 @@ def check_wavelet_stationarity(
 		"adf_statistic": adf_stat,
 		"kpss_statistic": kpss_stat,
 		"interpretation": f"Signal remains non-stationary despite all tested max_lag values." if final_interpretation is None else final_interpretation + " (best result from all max_lag values)",
-		"autocorrelation": autocorr_values
+		"autocorrelation": autocorr_values,
+		"autocorrelation_threshold": autocorr_threshold,
+		"max_autocorrelation": max(abs(v) for v in autocorr_values.values()) if isinstance(autocorr_values, dict) else None,
+		"lags_tested": list(autocorr_values.keys()) if isinstance(autocorr_values, dict) else None,
 	}
 
 def preprocess_signal_for_stationarity(signal: np.ndarray, signal_type: str) -> tuple:

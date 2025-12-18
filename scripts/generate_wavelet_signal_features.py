@@ -21,7 +21,7 @@ console = Console()
 ## CALCULATE WAVELET FEATURES
 def energy_entropy_ratio(coeffs: list) -> float:
 	"""
-	Compute energy-to-entropy ratio for wavelet coefficients.
+	Compute energy-to-entropy ratio for wavelet coefficients. Energy to entropy represents the ratio of the total energy of the wavelet coefficients to their entropy, which can be used to assess the complexity and information content of the signal. For tokens on a page, this is a measure of the complexity of the token distribution across pages.
 
 	Parameters:
 	-----------
@@ -43,7 +43,7 @@ def energy_entropy_ratio(coeffs: list) -> float:
 
 def adaptive_threshold(coeffs: list) -> float:
 	"""
-	Calculate an adaptive threshold based on the Median Absolute Deviation (MAD).
+	Calculate an adaptive threshold based on the Median Absolute Deviation (MAD). The adaptive threshold is used to measure sparsity in wavelet coefficients. For tokens on a page, this is a measure of the sparsity of the token distribution across pages.
 
 	Parameters:
 	----------
@@ -61,7 +61,7 @@ def adaptive_threshold(coeffs: list) -> float:
 
 def adaptive_sparsity_measure(coeffs: list) -> tuple:
 	"""
-	Measure sparsity of wavelet coefficients using an adaptive threshold.
+	Measure sparsity of wavelet coefficients using an adaptive threshold. Sparsity is defined as the percentage of coefficients that are below the adaptive threshold. For tokens on a page, this is a measure of the sparsity of the token distribution across pages.
 
 	Parameters:
 	-----------
@@ -87,7 +87,7 @@ def adaptive_sparsity_measure(coeffs: list) -> tuple:
 
 def wavelet_entropy(coeffs: list) -> float:
 	"""
-	Calculate wavelet entropy as a measure of signal complexity.
+	Calculate wavelet entropy as a measure of signal complexity. Wavelet entropy is a measure of the distribution of energy across different scales in the wavelet transform. For tokens on a page, this is a measure of the complexity of the token distribution across pages.
 
 	Parameters:
 	-----------
@@ -106,7 +106,7 @@ def wavelet_entropy(coeffs: list) -> float:
 
 def signal_smoothness(signal: np.ndarray) -> float:
 	"""
-	Compute signal smoothness based on second-order differences.
+	Compute signal smoothness based on second-order differences. Signal smoothness is a measure of how much the signal deviates from a straight line, which can be used to assess the complexity and variability of the signal. For tokens on a page, this is a measure of the smoothness of the token distribution across pages.
 
 	Parameters:
 	-----------
@@ -124,7 +124,7 @@ def signal_smoothness(signal: np.ndarray) -> float:
 
 def correlation_coefficients(original: np.ndarray, reconstructed: np.ndarray) -> float:
 	"""
-	Calculate the correlation coefficient between the original and reconstructed signals.
+	Calculate the correlation coefficient between the original and reconstructed signals. This coefficient measures the linear relationship between the original and reconstructed signals, indicating how well the reconstruction preserves the original signal's characteristics. For tokens on a page, this is a measure of how well the token distribution across pages is preserved in the reconstructed signal.
 
 	Parameters:
 	-----------
@@ -142,7 +142,7 @@ def correlation_coefficients(original: np.ndarray, reconstructed: np.ndarray) ->
 
 def signal_variance_across_levels(coeffs: list) -> list:
 	"""
-	Calculate the variance of wavelet coefficients across decomposition levels.
+	Calculate the variance of wavelet coefficients across decomposition levels. This can be used to assess the distribution of energy across different scales in the wavelet transform. For tokens on a page, this is a measure of the distribution of token complexity across pages.
 
 	Parameters:
 	-----------
@@ -193,7 +193,7 @@ def calculate_spectral_features(
 	positive_amplitudes: np.ndarray, positive_frequencies: np.ndarray, verbose: bool
 ) -> dict:
 	"""
-	Calculate spectral features: magnitude, centroid, and bandwidth.
+	Calculate spectral features: magnitude, centroid, and bandwidth. These features are derived from the positive amplitudes and frequencies obtained from the FFT or STFT of a signal. These features provide insights into the signal's frequency content and distribution. For tokens on a page, these features describe the frequency characteristics of the token distribution across pages.
 
 	Parameters:
 	-----------
@@ -235,7 +235,7 @@ def calculate_spectral_features(
 
 def analyze_spectral_peaks(spectral_amplitudes: np.ndarray, spectral_frequencies: np.ndarray, verbose: bool, min_peak_prominence: float = 0.01) -> dict:
 	"""
-	Analyze positive frequencies and amplitudes from spectral transformations (FFT or STFT) to determine key characteristics.
+	Analyze positive frequencies and amplitudes from spectral transformations (FFT or STFT) to determine key characteristics. This function is particularly useful for understanding the dominant frequency components in a signal. For tokens on a page, this function helps in understanding the dominant frequency components of the token distribution.
 
 	Parameters:
 	-----------
@@ -323,7 +323,7 @@ def calculate_dynamic_cutoff(
 	percentile_values: list = [5, 10, 15]  # Iterating percentile settings
 ) -> tuple:
 	"""
-	Calculate the dynamic cutoff for a signal based on its median, dominant peak amplitude, and lower percentiles.
+	Calculate the dynamic cutoff for a signal based on its median, dominant peak amplitude, and lower percentiles. This function helps in setting a meaningful cutoff for the signal, ensuring that it respects both the median and the dominant peak amplitude while also considering lower percentiles. This is particularly useful for signals with varying levels of noise or variability. For tokens on a page, this function helps in setting a meaningful cutoff for the token distribution across pages.
 
 	Parameters:
 	-----------
@@ -372,7 +372,7 @@ def calculate_stft(tokens_signal: np.ndarray, verbose: bool, min_length: int = 1
 				   nperseg_values: list = [16, 32, 64], 
 				   noverlap_ratio: float = 0.5) -> dict:
 	"""
-	Compute the Short-Time Fourier Transform (STFT) and extract spectral features with thresholding.
+	Compute the Short-Time Fourier Transform (STFT) and extract spectral features with thresholding. This function iterates over different window types, segment lengths, and SNR/stationarity thresholds to find the best configuration for STFT analysis. It returns the best STFT result based on the specified criteria.
 
 	Parameters:
 	-----------
@@ -402,9 +402,9 @@ def calculate_stft(tokens_signal: np.ndarray, verbose: bool, min_length: int = 1
 	if len(tokens_signal) < min_length:
 		if verbose:
 			console.print(f"[yellow]Signal length ({len(tokens_signal)}) too short for STFT.[/yellow]")
-		return None
+		return {}
 
-	best_result = None
+	best_result = {}
 
 	# Iterate over parameter combinations
 	for window in windows:
@@ -472,13 +472,13 @@ def calculate_stft(tokens_signal: np.ndarray, verbose: bool, min_length: int = 1
 						"stft_dynamic_cutoff_percentile": cutoff_percentile,
 					}
 					# Track the best STFT result (e.g., highest spectral magnitude)
-					if best_result is None or result["stft_spectral_magnitude"] > best_result["stft_spectral_magnitude"]:
+					if not best_result or result["stft_spectral_magnitude"] > best_result.get("stft_spectral_magnitude", -np.inf):
 						best_result = result
 
 	if verbose and best_result:
 		console.print(f"[green]Best STFT config: Window={best_result['stft_window']}, nperseg={best_result['stft_nperseg']}, SNR={best_result['stft_snr_threshold']}[/green]")
 
-	return best_result if best_result else None
+	return best_result if best_result else {}
 
 def calculate_fft(
 	tokens_signal: np.ndarray,
@@ -488,8 +488,7 @@ def calculate_fft(
 	stationarity_thresholds: list = [0.3, 0.5, 0.7]  # Iterating over stationarity thresholds
 ) -> dict:
 	"""
-	Calculate the Fast Fourier Transform (FFT) of a given signal. This function first ensures the signal is suitable for FFT analysis
-	by validating its length, signal-to-noise ratio (SNR), and stationarity. If the signal passes these checks, the FFT is performed.
+	Calculate the Fast Fourier Transform (FFT) of a given signal. This function first ensures the signal is suitable for FFT analysis by validating its length, signal-to-noise ratio (SNR), and stationarity. If the signal passes these checks, the FFT is performed. The function returns the positive amplitudes and frequencies, along with the final SNR and stationarity thresholds used. Fast Fourier Transform (FFT) is a powerful tool for analyzing the frequency components of a signal, which can be particularly useful for understanding the distribution of tokens across different frequency bands in a signal. For tokens on a page, FFT can help in understanding the distribution of tokens across different frequency bands.
 
 	Parameters:
 	-----------
@@ -520,9 +519,9 @@ def calculate_fft(
 	if len(tokens_signal) < min_length:
 		if verbose:
 			console.print(f"[yellow]Signal length ({len(tokens_signal)}) is too short for meaningful FFT analysis.[/yellow]")
-		return None # Return None if signal is too short
+		return {} # Return None if signal is too short
 
-	best_result = None
+	best_result = {}
 
 	# Iterate over SNR and stationarity thresholds
 	for snr_threshold in snr_thresholds:
@@ -591,10 +590,10 @@ def calculate_fft(
 			}
 
 			# Track the best FFT result (e.g., highest spectral magnitude)
-			if best_result is None or result["fft_spectral_magnitude"] > best_result["fft_spectral_magnitude"]:
+			if not best_result or result["fft_spectral_magnitude"] > best_result.get("fft_spectral_magnitude", -np.inf):
 				best_result = result
 
-	return best_result if best_result else None
+	return best_result if best_result else {}
 	
 def detect_relative_peaks(
 	tokens_signal: np.ndarray,
@@ -602,7 +601,7 @@ def detect_relative_peaks(
 	distance_factors: list = [10, 20, 30]  # Iterating distance settings as fractions of signal length
 ) -> dict:
 	"""
-	Perform relative peak detection on the signal and calculate statistics about the detected peaks.
+	Perform relative peak detection on the signal and calculate statistics about the detected peaks. This function iterates over different prominence and distance settings to find the best configuration for peak detection. It returns the best peak detection result based on the specified criteria. This function is particularly useful for identifying significant features in a signal, such as peaks that represent important events or changes. For tokens on a page, this function can help in identifying significant changes in token distribution across pages.
 
 	Parameters:
 	-----------
@@ -688,7 +687,7 @@ def detect_relative_peaks(
 
 def calculate_autocorrelation(signal: np.ndarray) -> float:
 	"""
-	Calculate the maximum autocorrelation of a signal.
+	Calculate the maximum autocorrelation of a signal. The maximum autocorrelation is a measure of the signal's periodicity. For tokens on a page, this can indicate the presence of repeating patterns in the token distribution.
 
 	Parameters:
 	-----------
@@ -708,7 +707,7 @@ def calculate_autocorrelation(signal: np.ndarray) -> float:
 
 def calculate_signal_envelope(signal: np.ndarray) -> dict:
 	"""
-	Calculate the upper and lower envelopes of a signal.
+	Calculate the upper and lower envelopes of a signal. The upper envelope represents the maximum amplitude at each time point, while the lower envelope represents the minimum amplitude. This can be used to understand the signal's amplitude variations over time. For tokens on a page, this can help in understanding the variability of token distribution over time.
 
 	Parameters:
 	-----------
@@ -810,8 +809,6 @@ def calculate_signal_metrics(
 
 	# Signal Envelope
 	envelope_metrics = calculate_signal_envelope(tokens_signal)
-
-
 
 	# Compile All Results
 	metrics = {

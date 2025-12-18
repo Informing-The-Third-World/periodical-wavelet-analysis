@@ -423,7 +423,6 @@ def compare_and_rank_wavelet_metrics(
 		for signal_type, settings in wavelet_transform_settings.items():
 			signal = raw_signal if signal_type == 'raw' else smoothed_signal
 			console.print(f"For {signal_type} signal...", style="light_steel_blue")
-			
 			# Validate signal metrics
 			subset_signal_metrics_df = signal_metrics_df[signal_metrics_df.signal_type == signal_type].reset_index(drop=True)
 			if len(subset_signal_metrics_df) != 1:
@@ -573,8 +572,23 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 			console.print("[red]Skipping wavelet analysis due to error with token signal.[/red]")
 			continue
 		# Check if processed signals differ from original signals
-		raw_signal_changed = not np.allclose(tokens_raw_signal, processed_tokens_raw_signal, atol=1e-6)
-		smoothed_signal_changed = not np.allclose(tokens_smoothed_signal, processed_tokens_smoothed_signal, atol=1e-6)
+		if tokens_raw_signal.shape != processed_tokens_raw_signal.shape:
+			raw_signal_changed = True
+		else:
+			raw_signal_changed = not np.allclose(
+				tokens_raw_signal,
+				processed_tokens_raw_signal,
+				atol=1e-6
+			)
+
+		if tokens_smoothed_signal.shape != processed_tokens_smoothed_signal.shape:
+			smoothed_signal_changed = True
+		else:
+			smoothed_signal_changed = not np.allclose(
+				tokens_smoothed_signal,
+				processed_tokens_smoothed_signal,
+				atol=1e-6
+			)
 
 		if raw_signal_changed or smoothed_signal_changed:
 			console.print("[yellow]Processed signal differs from original. Computing both for comparison.[/yellow]")
@@ -592,6 +606,8 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 
 			# Determine which signal to use
 			use_original = finalized_signal_metrics_df.selected_version.iloc[0] == "original"
+			finalized_signal_metrics_df = finalized_signal_metrics_df.copy()
+			finalized_signal_metrics_df["signal_type"] = "raw" if use_original else "processed"
 			selected_tokens_raw_signal = tokens_raw_signal if use_original else processed_tokens_raw_signal
 			selected_tokens_smoothed_signal = tokens_smoothed_signal if use_original else processed_tokens_smoothed_signal
 
@@ -601,9 +617,9 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 			finalized_signal_metrics_df = compute_signal_metrics_for_raw_and_smoothed(
 				tokens_raw_signal, tokens_smoothed_signal, stationarity_data_settings, verbose=False
 			)
+			finalized_signal_metrics_df["signal_type"] = "raw"
 			selected_tokens_raw_signal = tokens_raw_signal
 			selected_tokens_smoothed_signal = tokens_smoothed_signal
-		
 		# Calculate wavelet metrics and signal metrics using the selected signals
 		best_wavelet_config = compare_and_rank_wavelet_metrics(
 			selected_tokens_raw_signal, selected_tokens_smoothed_signal, wavelet_analysis_dir, volume['htid'], finalized_signal_metrics_df, stationarity_data_settings, should_use_parallel

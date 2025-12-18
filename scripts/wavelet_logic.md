@@ -9,7 +9,7 @@ This project applies wavelet transformations to analyze token frequency signals 
 The first step is extracting token frequency signals from periodical text. This is handled in:
 
 - `generate_signal_processing_data()`: Loads periodical data and prepares it for token extraction. The function is in the `generate_token_frequency_wavelet_analysis.py` script. It is the main entry point for processing periodicals.
-- `process_tokens()`: Extracts raw and smoothed token frequency signals to capture overall trends while reducing noise. The function is in the `utils.py` script. 
+- `process_tokens()`: Extracts raw and smoothed token frequency signals to capture overall trends while reducing noise. The function is in the `utils.py` script.
 - `find_best_smoothing_window()`: To generate the smoothed token frequency, we determine the **optimal window size** for moving average smoothing. We compare a **fixed window size** (default = 5) with **dynamic window sizes** ranging from `min_window` to `max_window`. We select the window size that achieves the best balance of variance reduction and smoothness. The function is in the `utils.py` script.
 
 ### 2. Stationarity Testing
@@ -116,13 +116,23 @@ The stationarity checks and preprocessing are handled in:
 - `apply_differencing()` & `apply_detrending()`:  
   - Apply transformations if the signal is non-stationary.
 
-These functions are implemented in **`generate_wavelet_stationarity.py`** script.
+These functions are implemented in **`generate_wavelet_stationarity.py`** script. We initially check stationarity in our first processing of the signal (the `ensure_stationarity_for_signals()` in the `generate_toke_frequency_wavelet_analysis.py` script), but we also check it after processing `DWT` and `SWT` wavelet transformations (in the `generate_wavelet_transformations.py` script). This is because the wavelet transformations require stationarity, and we want to ensure that the signal remains stationary after each transformation.
+
+---
 
 ### 3. Computing Pre-Wavelet Signal Features
 
-After assessing stationarity, we compute various statistical and structural features of the signal. These features provide insight into the characteristics of the **raw** and **smoothed** token frequency signals, helping to guide wavelet transformation choices. The function `calculate_signal_metrics()` generates the following key features:
+After checking for stationarity, we also return the processed tokens from the stationarity check (relevant if we need to use detrending or differencing to make the signal stationary). 
 
----
+```python
+# Check if processed signals differ from original signals
+raw_signal_changed = not np.allclose(tokens_raw_signal, processed_tokens_raw_signal, atol=1e-6)
+smoothed_signal_changed = not np.allclose(tokens_smoothed_signal, processed_tokens_smoothed_signal, atol=1e-6)
+```
+
+If there is any change, then we run the next step on both the original and processed signal. But if there is not, we default to the original signal. We use the numpy `allclose` function to check if the signals are the same.
+
+Depending then on whether the signal has changed, we either computer **just** the original signal or both the original and processed signal, specifically for both the **raw** and **smoothed** token frequency signals, helping to guide wavelet transformation choices. The function `calculate_signal_metrics()` generates the following key features:
 
 #### **Feature Table**
 
@@ -132,20 +142,33 @@ After assessing stationarity, we compute various statistical and structural feat
 | `variance_ratio_across_levels`   | Ratio of max variance to total variance across levels.                       | Lower                   | Suggests a more evenly distributed signal across decomposition levels. | ❌ No |
 | `smoothness`                     | Measures how smooth the signal is using second-order differences.            | Higher                  | Indicates a less erratic token frequency pattern. | ❌ No |
 | `correlation`                     | Correlation between original and reconstructed signals.                      | Higher                  | A better preservation of the original token frequency pattern. | ✅ Yes (for reconstruction-based comparisons) |
-| `dominant_frequency`             | Frequency with the highest amplitude in the FFT spectrum.                    | Context-dependent       | Higher values suggest more periodic patterns in token frequency. | ❌ No |
-| `amplitude_max`                  | Maximum amplitude of the dominant frequency.                                 | Higher                  | Indicates stronger periodic patterns. | ❌ No |
-| `num_fft_peaks`                  | Number of prominent peaks in the frequency spectrum.                         | Context-dependent       | More peaks suggest complex, multi-periodic structures in token frequency. | ❌ No |
+| **Autocorrelation-Based Features** | **Captures periodicity and self-similarity in the token frequency signal.** |                         |                                   |                        |
+| `max_autocorrelation`            | Maximum autocorrelation value of the signal.                                 | Higher                  | Suggests more self-similarity and periodicity in token frequency. | ✅ Yes (for reliable periodicity detection) |
+| **FFT-Based Features**            | **Extracts frequency-domain characteristics of the signal.**                 |                         |                                   |                        |
+| `fft_dominant_frequency`         | Frequency with the highest amplitude in the FFT spectrum.                    | Context-dependent       | Higher values suggest more periodic patterns in token frequency. | ❌ No |
+| `fft_amplitude_max`              | Maximum amplitude of the dominant frequency.                                 | Higher                  | Indicates stronger periodic patterns. | ❌ No |
+| `fft_num_peaks`                  | Number of prominent peaks in the frequency spectrum.                         | Context-dependent       | More peaks suggest complex, multi-periodic structures in token frequency. | ❌ No |
+| `fft_spectral_magnitude`         | Sum of all FFT amplitudes, indicating overall spectral energy.              | Higher                  | Stronger signal with more energy in frequency components. | ❌ No |
+| `fft_spectral_centroid`          | Weighted mean frequency of the signal’s spectrum.                           | Higher                  | Suggests the signal’s energy is concentrated at higher frequencies. | ❌ No |
+| `fft_spectral_bandwidth`         | Measure of how spread out the spectral energy is.                           | Higher                  | A wider spread suggests a more complex signal. | ❌ No |
+| `fft_frequency_max`              | Highest frequency observed in the FFT spectrum.                             | Higher                  | Indicates more rapid fluctuations in token frequency. | ❌ No |
+| **STFT-Based Features**           | **Short-Time Fourier Transform (STFT) captures time-frequency variations.**  |                         |                                   |                        |
+| `stft_dominant_frequency`        | Most prominent frequency across time in STFT.                               | Context-dependent       | Indicates time-evolving periodic structures. | ❌ No |
+| `stft_peak_amplitude`            | Maximum amplitude of the dominant frequency over time.                       | Higher                  | Indicates stronger periodic structures. | ❌ No |
+| `stft_num_peaks`                 | Number of prominent spectral peaks detected over time.                       | Context-dependent       | More peaks suggest complex, evolving frequency structures. | ❌ No |
+| `stft_spectral_magnitude`        | Sum of all STFT amplitudes, representing total spectral energy.              | Higher                  | Suggests strong presence of frequency components over time. | ❌ No |
+| `stft_spectral_centroid`         | Weighted mean frequency in the STFT spectrum.                               | Higher                  | Energy concentrated in higher frequencies over time. | ❌ No |
+| `stft_spectral_bandwidth`        | Variability of the spectral energy distribution over time.                   | Higher                  | Indicates complex or multi-frequency behavior. | ❌ No |
+| `stft_frequency_max`             | Highest frequency observed in the STFT spectrum.                            | Higher                  | Suggests more rapid variations over time. | ❌ No |
+| `stft_variance_magnitude`        | Variance of STFT magnitude over time.                                       | Higher                  | Indicates fluctuating spectral energy over time. | ❌ No |
+| **Peak Detection Features**       | **Identifies local peaks and their significance in the signal.**             |                         |                                   |                        |
 | `relative_num_peaks`             | Number of peaks detected in the original token frequency signal.             | Higher                  | Suggests more fluctuation in token frequency. | ❌ No |
 | `avg_prominence`                 | Average prominence of detected peaks.                                       | Higher                  | Stronger, more distinct peaks in token frequency. | ❌ No |
 | `prominence_min`                 | Minimum prominence of detected peaks.                                       | Lower                   | Indicates weak, subtle variations in token frequency. | ❌ No |
 | `prominence_max`                 | Maximum prominence of detected peaks.                                       | Higher                  | Indicates dominant, strong fluctuations in token frequency. | ❌ No |
-| `max_autocorrelation`            | Maximum autocorrelation value of the signal.                                 | Higher                  | Suggests more self-similarity and periodicity in token frequency. | ✅ Yes (for reliable periodicity detection) |
+| **Signal Envelope Features**      | **Measures the upper and lower bounds of signal amplitude variations.**      |                         |                                   |                        |
 | `upper_envelope`                 | Maximum absolute signal value.                                              | Higher                  | Indicates stronger fluctuations in token frequency. | ❌ No |
 | `lower_envelope`                 | Minimum absolute signal value.                                              | Lower                   | Indicates more stability in token frequency. | ❌ No |
-| `spectral_magnitude`             | Sum of all FFT amplitudes, indicating overall spectral energy.              | Higher                  | Stronger signal with more energy in frequency components. | ❌ No |
-| `spectral_centroid`              | Weighted mean frequency of the signal’s spectrum.                           | Higher                  | Suggests the signal’s energy is concentrated at higher frequencies. | ❌ No |
-| `spectral_bandwidth`             | Measure of how spread out the spectral energy is.                           | Higher                  | A wider spread suggests a more complex signal. | ❌ No |
-| `frequency_max`                  | Highest frequency observed in the FFT spectrum.                             | Higher                  | Indicates more rapid fluctuations in token frequency. | ❌ No |
 
 These features provide a **comprehensive view of the token frequency signal**, capturing its periodicity, variance, and structural characteristics. They serve as a foundation for evaluating wavelet transformations and identifying the most suitable representation for further analysis. This code is executed in the `generate_wavelet_signal_features.py` script.
 
@@ -163,6 +186,26 @@ These features provide a **comprehensive view of the token frequency signal**, c
 #### **Feature Computation and Parameter Details**
 
 Several parameters in `calculate_signal_metrics()` influence how these features are computed. Below is an explanation of key parameters and their roles:
+
+### Why Use Both FFT and STFT?
+We compute both the Fast Fourier Transform (FFT) and the Short-Time Fourier Transform (STFT) to ensure robust frequency analysis:
+
+- **FFT**: Captures the **global** frequency structure of the signal but assumes the entire signal is **stationary**.
+- **STFT**: Captures **time-localized** frequency information, making it useful for signals that evolve over time.
+
+### Ensuring Meaningful Frequency Analysis
+Both FFT and STFT computations are **only performed if the signal meets specific quality criteria**:
+
+- **Signal-to-Noise Ratio (SNR) Thresholding**:  
+  - Ensures that FFT and STFT are computed **only for signals with sufficient structure**.
+  - Multiple thresholds (`[3.0, 5.0, 7.0]`) are tested to select the **best** setting.
+
+- **Stationarity Checks for Frequency Stability**:  
+  - Signals that exhibit **strong time-varying properties** may produce unreliable FFT results.
+  - We iterate over stationarity thresholds (`[0.3, 0.5, 0.7]`) to determine if **spectral features are valid**.
+
+- **Dynamic Cutoffs for Peak Detection**:  
+  - We refine spectral analysis by using a **dynamic cutoff**, ensuring that only meaningful peaks are analyzed.
 
 ##### **1. Fast Fourier Transform (FFT) Analysis**
 
@@ -513,23 +556,9 @@ Preemptive Fix:
 	•	Other methods (e.g., STFT) were considered but wavelets provided better temporal localization.
 	•	Consider adding a brief baseline comparison to a simpler method (e.g., a moving average or FFT segmentation) to validate that wavelets improve segmentation.
 
-⸻
 
-2. Stationarity Preprocessing Assumptions
 
-Issue:
-	•	The stationarity testing and preprocessing steps are solid, but reviewers might challenge:
-	•	The choice of preprocessing order (detrending → differencing)
-	•	Whether stationarity checks are repeated after each transformation
-	•	If differencing removes meaningful periodicity from token frequencies
-
-Preemptive Fix:
-	•	Clarify that stationarity is rechecked after preprocessing.
-	•	Ensure that the differencing step does not destroy key periodic structures—you might check autocorrelation before and after differencing to verify that periodic patterns remain intact.
-
-⸻
-
-3. Wavelet Ranking & Stability Metrics
+1. Wavelet Ranking & Stability Metrics
 
 Issue:
 	•	The wavelet ranking approach (static vs. dynamic weighting) is strong, but:
