@@ -144,88 +144,113 @@ def check_wavelet_stationarity(
 		- interpretation (str): Explanation of the result.
 	"""
 	final_interpretation = None
-	# Compute autocorrelation once for all lags
+	nobs = len(signal)
+	ntrend = 1  # regression='c' → constant included
+
+	# --- EARLY EXIT: signal too short for ADF entirely ---
+	max_allowed_lag = int(nobs / 2 - 1 - ntrend)
+	if max_allowed_lag <= 0:
+		return {
+			"is_stationary": None,
+			"best_max_lag": None,
+			"adf_pvalue": None,
+			"kpss_pvalue": None,
+			"adf_statistic": None,
+			"kpss_statistic": None,
+			"interpretation": "Signal too short for ADF/KPSS testing",
+			"reason": "nobs too small",
+			"nobs": nobs,
+		}
+
+	# Compute autocorrelation once
 	autocorr_values = {lag: calculate_autocorrelation(signal, lag) for lag in autocorr_lags}
 
-	for max_lag in max_lag_range:
-		console.print(f"[blue]Testing stationarity with max_lag={max_lag}...[/blue]")
+	for requested_lag in max_lag_range:
 
 		# Augmented Dickey-Fuller Test
-		adf_stat, adf_pvalue, _, _, _, _ = adfuller(signal, maxlag=max_lag)
-		console.print(f"[violet]ADF Test for {signal_type}: Statistic={adf_stat:.4f}, p-value={adf_pvalue:.4f}[/violet]")
+		safe_max_lag = min(requested_lag, max_allowed_lag)
+		if safe_max_lag <= 0:
+			continue
+
+		console.print(
+			f"[blue]Testing stationarity with max_lag={safe_max_lag} (requested {requested_lag})...[/blue]"
+		)
+
+		try:
+			adf_stat, adf_pvalue, _, _, _, _ = adfuller(signal, maxlag=safe_max_lag)
+		except ValueError as e:
+			console.print(
+				f"[yellow]ADF failed at max_lag={safe_max_lag}: {e}[/yellow]"
+			)
+			continue
+
+		console.print(
+			f"[violet]ADF Test for {signal_type}: "
+			f"Statistic={adf_stat:.4f}, p-value={adf_pvalue:.4f}[/violet]"
+		)
 
 		# Kwiatkowski-Phillips-Schmidt-Shin Test
 		try:
 			kpss_stat, kpss_pvalue, _, _ = kpss(signal, regression='c')
-			console.print(f"[violet]KPSS Test for {signal_type}: Statistic={kpss_stat:.4f}, p-value={kpss_pvalue:.4f}[/violet]")
+			console.print(
+				f"[violet]KPSS Test for {signal_type}: "
+				f"Statistic={kpss_stat:.4f}, p-value={kpss_pvalue:.4f}[/violet]"
+			)
 		except ValueError as e:
-			console.print(f"[bright_red]Error in KPSS test: {e}[/bright_red]")
-			kpss_stat, kpss_pvalue = None, None  # Handle KPSS failure gracefully
+			console.print(f"[yellow]KPSS failed: {e}[/yellow]")
+			kpss_stat, kpss_pvalue = None, None
 
-		# --- Interpretation of Stationarity ---
+		# --- Interpretation logic  ---
 		if adf_pvalue <= significance_level and (kpss_pvalue is None or kpss_pvalue > significance_level):
-			interpretation = f"Stationary at max_lag={max_lag}. ADF rejected unit root (p={adf_pvalue:.4f}), KPSS failed to reject stationarity (p={kpss_pvalue})."
-			console.print(f"[green]{interpretation}[/green]")
+			interpretation = (
+				f"Stationary at max_lag={safe_max_lag}. "
+				f"ADF rejected unit root (p={adf_pvalue:.4f}), "
+				f"KPSS failed to reject stationarity."
+			)
 			return {
 				"is_stationary": True,
-				"best_max_lag": max_lag,
+				"best_max_lag": safe_max_lag,
 				"adf_pvalue": adf_pvalue,
 				"kpss_pvalue": kpss_pvalue,
 				"adf_statistic": adf_stat,
 				"kpss_statistic": kpss_stat,
 				"interpretation": interpretation,
-				"autocorrelation": autocorr_values
+				"autocorrelation": autocorr_values,
 			}
 
-		elif adf_pvalue > significance_level and (kpss_pvalue is not None and kpss_pvalue <= significance_level):
-			interpretation = f"Non-stationary at max_lag={max_lag}. ADF failed to reject unit root (p={adf_pvalue:.4f}), KPSS detected trend-stationarity (p={kpss_pvalue:.4f})."
-			console.print(f"[red]{interpretation}[/red]")
-			final_interpretation = interpretation
+		elif adf_pvalue > significance_level and kpss_pvalue is not None and kpss_pvalue <= significance_level:
+			final_interpretation = (
+				f"Non-stationary at max_lag={safe_max_lag}. "
+				f"ADF failed to reject unit root, KPSS detected trend."
+			)
 
-		elif adf_pvalue <= significance_level and (kpss_pvalue is not None and kpss_pvalue <= significance_level):
-			interpretation = f"Conflicting results at max_lag={max_lag}. ADF suggests stationarity (p={adf_pvalue:.4f}), but KPSS indicates trend-stationarity (p={kpss_pvalue:.4f}). Further preprocessing may be needed."
-			console.print(f"[yellow]{interpretation}[/yellow]")
-			final_interpretation = interpretation
+		elif adf_pvalue <= significance_level and kpss_pvalue is not None and kpss_pvalue <= significance_level:
+			final_interpretation = (
+				f"Conflicting ADF/KPSS results at max_lag={safe_max_lag}."
+			)
 
-	# If both tests are non-significant but autocorrelation is low, consider the signal stationary
-	if all(abs(autocorr_values[lag]) < autocorr_threshold for lag in autocorr_lags):
-		# Check if the maximum autocorrelation value is below the threshold
-		if isinstance(autocorr_values, dict):
-			max_autocorr = max(abs(v) for v in autocorr_values.values())
-		else:
-			max_autocorr = abs(autocorr_values)
-		interpretation = (
-			f"Autocorrelation (max={max_autocorr:.4f}) suggests stationarity despite weak ADF/KPSS results."
-			if final_interpretation is None
-			else final_interpretation + f" (max autocorrelation={max_autocorr:.4f}, below threshold). Therefore, signal is stationary."
-		)
+	# --- Autocorrelation fallback (unchanged, but now safe) ---
+	if all(abs(v) < autocorr_threshold for v in autocorr_values.values()):
+		max_autocorr = max(abs(v) for v in autocorr_values.values())
 		return {
 			"is_stationary": True,
 			"best_max_lag": None,
-			"adf_pvalue": adf_pvalue,
-			"kpss_pvalue": kpss_pvalue,
-			"adf_statistic": adf_stat,
-			"kpss_statistic": kpss_stat,
-			"interpretation": interpretation,
+			"adf_pvalue": None,
+			"kpss_pvalue": None,
+			"interpretation": (
+				"Low autocorrelation suggests stationarity despite weak ADF/KPSS."
+			),
 			"autocorrelation": autocorr_values,
-			"autocorrelation_threshold": autocorr_threshold,
 			"max_autocorrelation": max_autocorr,
-			"lags_tested": list(autocorr_values.keys()) if isinstance(autocorr_values, dict) else None,
 		}
-	# If no stationary result was found, return the last tested result
-	console.print("[red]Signal remains non-stationary for all max_lag values tested.[/red]")
+
 	return {
 		"is_stationary": False,
 		"best_max_lag": None,
-		"adf_pvalue": adf_pvalue,
-		"kpss_pvalue": kpss_pvalue,
-		"adf_statistic": adf_stat,
-		"kpss_statistic": kpss_stat,
-		"interpretation": f"Signal remains non-stationary despite all tested max_lag values." if final_interpretation is None else final_interpretation + " (best result from all max_lag values)",
+		"adf_pvalue": None,
+		"kpss_pvalue": None,
+		"interpretation": final_interpretation or "Signal non-stationary",
 		"autocorrelation": autocorr_values,
-		"autocorrelation_threshold": autocorr_threshold,
-		"max_autocorrelation": max(abs(v) for v in autocorr_values.values()) if isinstance(autocorr_values, dict) else None,
-		"lags_tested": list(autocorr_values.keys()) if isinstance(autocorr_values, dict) else None,
 	}
 
 def preprocess_signal_for_stationarity(signal: np.ndarray, signal_type: str) -> tuple:

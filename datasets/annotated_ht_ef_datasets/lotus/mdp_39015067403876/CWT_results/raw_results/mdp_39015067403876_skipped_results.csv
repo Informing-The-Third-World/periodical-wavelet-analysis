@@ -1,5 +1,0 @@
-signal_type,wavelet,wavelet_energy_entropy,wavelet_sparsity,wavelet_adaptive_threshold,wavelet_psnr,signal_length,scales_used,emd_value,kl_divergence,is_complex,wavelet_entropy,avg_variance_across_levels,variance_ratio_across_levels,smoothness,correlation,dynamic_cutoff,dominant_frequency,amplitude_max,num_fft_peaks,positive_frequencies,positive_amplitudes,relative_num_peaks,avg_prominence,prominence_min,prominence_max,relative_peaks,relative_prominences,relative_left_bases,relative_right_bases,max_autocorrelation,upper_envelope,lower_envelope,spectral_magnitude,spectral_centroid,spectral_bandwidth,frequency_max,error,wavelet_type,htid
-raw,cgau8,,,,,202,100,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,a must be an array of real numbers,CWT,mdp.39015067403876
-raw,cmor,,,,,202,100,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,a must be an array of real numbers,CWT,mdp.39015067403876
-raw,fbsp,,,,,202,100,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,a must be an array of real numbers,CWT,mdp.39015067403876
-raw,shan,,,,,202,100,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,a must be an array of real numbers,CWT,mdp.39015067403876

@@ -165,48 +165,63 @@ def compute_signal_metrics_for_raw_and_smoothed(
 	return combined_metrics_df
 
 def select_best_signal_version(original_df: pd.DataFrame, processed_df: pd.DataFrame, threshold: float = 0.3) -> pd.DataFrame:
-    """
-    Decide whether to use the original or processed signal for analysis.
-    Uses a threshold to determine if preprocessing changed the signal too much.
+	"""
+	Decide whether to use the original or processed signal for analysis.
+	Uses a threshold to determine if preprocessing changed the signal too much.
 
-    Parameters
-    ----------
-    original_df : pd.DataFrame
-        DataFrame containing metrics for the original signal.
-    processed_df : pd.DataFrame
-        DataFrame containing metrics for the processed signal.
-    threshold : float, optional
-        Maximum allowed relative change before reverting to original. Default is 0.3 (30%).
+	Parameters
+	----------
+	original_df : pd.DataFrame
+		DataFrame containing metrics for the original signal.
+	processed_df : pd.DataFrame
+		DataFrame containing metrics for the processed signal.
+	threshold : float, optional
+		Maximum allowed relative change before reverting to original. Default is 0.3 (30%).
 
-    Returns
-    -------
-    selected_df : pd.DataFrame
-        DataFrame containing the best signal metrics for downstream analysis.
-        Includes a 'selected_version' column indicating whether each value came from 'original' or 'processed'.
-    """
-    # Ensure we only compare numeric columns
-    numeric_cols = original_df.select_dtypes(include=[np.number]).columns
-    original_numeric = original_df[numeric_cols]
-    processed_numeric = processed_df[numeric_cols]
+	Returns
+	-------
+	selected_df : pd.DataFrame
+		DataFrame containing the best signal metrics for downstream analysis.
+		Includes a 'selected_version' column indicating whether each value came from 'original' or 'processed'.
+	"""
+	# Ensure we only compare numeric columns
+	numeric_cols = (
+		original_df.select_dtypes(include=[np.number]).columns
+		.intersection(
+			processed_df.select_dtypes(include=[np.number]).columns
+		)
+	)
+	meta_cols = original_df.columns.difference(numeric_cols)
 
-    # Compute absolute and relative differences
-    delta_df = (processed_numeric - original_numeric).abs()
-    relative_change_df = delta_df / (original_numeric.abs() + 1e-6)  # Avoid divide by zero
+	original_numeric = original_df[numeric_cols]
+	processed_numeric = processed_df[numeric_cols]
 
-    # Decide which value to keep per column
-    selection_mask = relative_change_df < threshold  # True = use processed, False = use original
+	# Compute absolute and relative differences
+	delta_df = (processed_numeric - original_numeric).abs()
+	relative_change_df = delta_df / (original_numeric.abs() + 1e-6)  # Avoid divide by zero
 
-    # Select values based on the mask
-    selected_df = original_numeric.where(~selection_mask, processed_numeric)
+	# Decide which value to keep per column
+	selection_mask = relative_change_df < threshold  # True = use processed, False = use original
+	selected_numeric = original_numeric.where(~selection_mask, processed_numeric)
 
-    # Track selection sources
-    selection_info = pd.DataFrame("original", index=original_df.index, columns=numeric_cols)
-    selection_info[selection_mask] = "processed"
+	# Track provenance
+	selection_info = pd.DataFrame(
+		"original",
+		index=original_df.index,
+		columns=numeric_cols
+	)
+	selection_info[selection_mask] = "processed"
 
-    # Append selection info
-    selected_df["selected_version"] = selection_info.mode(axis=1)[0]  # Mode ensures a single label per row
+	selected_numeric["selected_version"] = selection_info.mode(axis=1)[0]
 
-    return selected_df
+	# 🔑 Reattach metadata (including signal_type)
+	selected_df = pd.concat(
+		[original_df[meta_cols].reset_index(drop=True),
+		 selected_numeric.reset_index(drop=True)],
+		axis=1
+	)
+
+	return selected_df
 
 ## WAVELET RANKING AND COMPARISON FUNCTIONS
 def filter_wavelets(wavelets: list, exclude_complex: bool = True) -> list:
@@ -450,11 +465,11 @@ def compare_and_rank_wavelet_metrics(
 			results, skipped_results = process_wavelet_type(wavelet_type, wavelet_info, signal, modes, signal_type)
 			
 			if not results.empty:
-				results.update({
-					'wavelet_type': wavelet_type,
-					'signal_type': signal_type,
-					'htid': volume_id
-				})
+				results = results.assign(
+					wavelet_type=wavelet_type,
+					signal_type=signal_type,
+					htid=volume_id
+				)
 				
 				subset_ranked, ranked = process_signal_results(
 					results,
@@ -467,11 +482,11 @@ def compare_and_rank_wavelet_metrics(
 
 			# Save skipped results
 			if not skipped_results.empty:
-				skipped_results.update({
-					'wavelet_type': wavelet_type,
-					'signal_type': signal_type,
-					'htid': volume_id
-				})
+				skipped_results = skipped_results.assign(
+					wavelet_type=wavelet_type,
+					signal_type=signal_type,
+					htid=volume_id
+				)
 				skipped_results.to_csv(f"{individual_signal_file_path}_skipped_results.csv", index=False)
 
 		# Process results for this wavelet type
@@ -507,7 +522,6 @@ def compare_and_rank_wavelet_metrics(
 		individual_combined_file_path,
 		"All",
 		prefix="all_",
-		suffix="full",
 		**ranking_params
 	)
 	
@@ -523,7 +537,206 @@ def compare_and_rank_wavelet_metrics(
 	return subset_all_combined[0:1]
 
 ## MAIN FUNCTIONS
-def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: str, should_use_parallel: bool, rerun_data: bool) -> pd.DataFrame:
+def generate_signal_processing_data(
+    volume_paths_df: pd.DataFrame,
+    output_dir: str,
+    should_use_parallel: bool,
+    rerun_data: bool
+) -> pd.DataFrame:
+    """
+    Generate signal- and wavelet-level metrics for each periodical volume.
+
+    This function:
+    - extracts raw and smoothed token-frequency signals per volume,
+    - enforces stationarity where required,
+    - selects the most appropriate signal version (original vs processed),
+    - evaluates and ranks wavelet representations,
+    - and aggregates volume-level metrics for downstream analysis.
+
+    Page-level classification (e.g. likely covers or issue boundaries) is
+    intentionally excluded and should be handled in separate EDA workflows.
+
+    Parameters
+    ----------
+    volume_paths_df : pd.DataFrame
+        DataFrame containing paths and metadata for each volume.
+    output_dir : str
+        Directory for saving figures and outputs.
+    should_use_parallel : bool
+        Whether to use parallel processing for wavelet evaluation.
+    rerun_data : bool
+        Whether to delete and recompute existing wavelet results.
+
+    Returns
+    -------
+    pd.DataFrame
+        Volume-level DataFrame containing aggregated signal and wavelet metrics.
+    """
+
+    console.print(
+        f"[bright_cyan]Starting signal processing..."
+        f" Output dir={output_dir}, Parallel={should_use_parallel}, Rerun={rerun_data}[/bright_cyan]"
+    )
+
+    volume_frequencies = []
+
+    volume_paths_df = (
+        volume_paths_df
+        .reset_index(drop=True)
+        .sort_values(by="table_row_index")
+    )
+
+    periodical_name = volume_paths_df["lowercase_periodical_name"].unique()[0]
+
+    for _, volume in volume_paths_df.iterrows():
+        console.print(f"Processing volume: {volume['htid']}", style="bright_blue")
+
+        (
+            merged_expanded_df,
+            grouped_df,
+            tokens_raw_signal,
+            tokens_smoothed_signal,
+            best_smoothed_window_size
+        ) = process_tokens(
+            volume["file_path"],
+            volume["is_annotated_periodical"],
+            volume["should_filter_greater_than_numbers"],
+            volume["should_filter_implied_zeroes"],
+        )
+
+        # ---- wavelet output directory ----
+        directory_path = os.path.dirname(volume["file_path"])
+        split_directory_path = directory_path.split("datasets/")[-2:]
+        wavelet_analysis_dir = os.path.join(
+            "..", "datasets", split_directory_path[0] + "datasets/", split_directory_path[1]
+        )
+
+        if rerun_data and os.path.exists(wavelet_analysis_dir):
+            shutil.rmtree(wavelet_analysis_dir)
+
+        os.makedirs(wavelet_analysis_dir, exist_ok=True)
+
+        # ---- stationarity enforcement ----
+        (
+            processed_tokens_raw_signal,
+            processed_tokens_smoothed_signal,
+            stationarity_data_settings,
+            skip_analysis,
+        ) = ensure_stationarity_for_signals(
+            tokens_raw_signal, tokens_smoothed_signal
+        )
+
+        if skip_analysis:
+            console.print(
+                "[red]Skipping wavelet analysis due to signal processing error.[/red]"
+            )
+            continue
+
+        # ---- compare original vs processed signals ----
+        raw_changed = (
+            tokens_raw_signal.shape != processed_tokens_raw_signal.shape or
+            not np.allclose(tokens_raw_signal, processed_tokens_raw_signal, atol=1e-6)
+        )
+
+        smoothed_changed = (
+            tokens_smoothed_signal.shape != processed_tokens_smoothed_signal.shape or
+            not np.allclose(tokens_smoothed_signal, processed_tokens_smoothed_signal, atol=1e-6)
+        )
+
+        if raw_changed or smoothed_changed:
+            console.print(
+                "[yellow]Processed signal differs from original. Evaluating both.[/yellow]"
+            )
+
+            original_metrics = compute_signal_metrics_for_raw_and_smoothed(
+                tokens_raw_signal,
+                tokens_smoothed_signal,
+                stationarity_data_settings,
+                verbose=False,
+            )
+
+            processed_metrics = compute_signal_metrics_for_raw_and_smoothed(
+                processed_tokens_raw_signal,
+                processed_tokens_smoothed_signal,
+                stationarity_data_settings,
+                verbose=False,
+            )
+
+            finalized_signal_metrics_df = select_best_signal_version(
+                original_metrics, processed_metrics
+            )
+
+            use_original = finalized_signal_metrics_df["selected_version"].iloc[0] == "original"
+
+            selected_tokens_raw_signal = (
+                tokens_raw_signal if use_original else processed_tokens_raw_signal
+            )
+            selected_tokens_smoothed_signal = (
+                tokens_smoothed_signal if use_original else processed_tokens_smoothed_signal
+            )
+
+            console.print(
+                f"[cyan]Using {'original' if use_original else 'processed'} signal.[/cyan]"
+            )
+
+        else:
+            console.print(
+                "[green]Processed signal identical to original. Using original.[/green]"
+            )
+
+            finalized_signal_metrics_df = compute_signal_metrics_for_raw_and_smoothed(
+                tokens_raw_signal,
+                tokens_smoothed_signal,
+                stationarity_data_settings,
+                verbose=False,
+            )
+
+            selected_tokens_raw_signal = tokens_raw_signal
+            selected_tokens_smoothed_signal = tokens_smoothed_signal
+
+        # ---- wavelet evaluation & ranking ----
+        best_wavelet_config = compare_and_rank_wavelet_metrics(
+            selected_tokens_raw_signal,
+            selected_tokens_smoothed_signal,
+            wavelet_analysis_dir,
+            volume["htid"],
+            finalized_signal_metrics_df,
+            stationarity_data_settings,
+            should_use_parallel,
+        )
+
+        # ---- assemble volume-level output ----
+        volume_data = {
+            "htid": merged_expanded_df["htid"].unique()[0],
+            "lowercase_periodical_name": volume["lowercase_periodical_name"],
+            "avg_tokens": merged_expanded_df["tokens_per_page"].mean(),
+            "avg_digits": merged_expanded_df["digits_per_page"].mean(),
+            "total_pages": merged_expanded_df["page_number"].nunique(),
+            "total_tokens": merged_expanded_df["tokens_per_page"].sum(),
+            "total_digits": merged_expanded_df["digits_per_page"].sum(),
+            "table_row_index": volume["table_row_index"],
+            "volume_classification": volume["volume_classification"],
+            "title_classification": volume["title_classification"],
+            "best_smoothed_window_size": best_smoothed_window_size,
+        }
+
+        volume_data.update(best_wavelet_config.iloc[0].to_dict())
+
+        volume_frequencies.append(volume_data)
+
+        volume_df = pd.DataFrame([volume_data])
+        wavelet_results_file_path = os.path.join(
+            wavelet_analysis_dir,
+            f"{volume['htid'].replace('.', '_')}_wavelet_volume_results.csv",
+        )
+        volume_df.to_csv(wavelet_results_file_path, index=False)
+
+    # ---- final aggregation ----
+    volume_frequencies_df = pd.DataFrame(volume_frequencies)
+
+    return volume_frequencies_df
+
+def old_generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: str, should_use_parallel: bool, rerun_data: bool) -> pd.DataFrame:
 	"""
 	Generate embeddings for each volume in the given DataFrame.
 
@@ -555,7 +768,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 
 		split_directory_path = directory_path.split('datasets/')[-2:]
 		wavelet_analysis_dir = os.path.join("..", "datasets", split_directory_path[0] + "datasets/", split_directory_path[1])
-
+		# Remove the wavelet_analysis_dir if it exists and rerun_data is True
 		if rerun_data and os.path.exists(wavelet_analysis_dir):
 			shutil.rmtree(wavelet_analysis_dir)
 
@@ -606,8 +819,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 
 			# Determine which signal to use
 			use_original = finalized_signal_metrics_df.selected_version.iloc[0] == "original"
-			finalized_signal_metrics_df = finalized_signal_metrics_df.copy()
-			finalized_signal_metrics_df["signal_type"] = "raw" if use_original else "processed"
+			
 			selected_tokens_raw_signal = tokens_raw_signal if use_original else processed_tokens_raw_signal
 			selected_tokens_smoothed_signal = tokens_smoothed_signal if use_original else processed_tokens_smoothed_signal
 
@@ -617,7 +829,6 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 			finalized_signal_metrics_df = compute_signal_metrics_for_raw_and_smoothed(
 				tokens_raw_signal, tokens_smoothed_signal, stationarity_data_settings, verbose=False
 			)
-			finalized_signal_metrics_df["signal_type"] = "raw"
 			selected_tokens_raw_signal = tokens_raw_signal
 			selected_tokens_smoothed_signal = tokens_smoothed_signal
 		# Calculate wavelet metrics and signal metrics using the selected signals
@@ -641,7 +852,8 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 		else:
 			missing_issues = []
 			chart = None
-
+		console.print(f"merged_signals: {merged_signals.columns.tolist()}", style="bright_cyan")
+		console.print(f"merged_expanded_df: {merged_expanded_df.columns}", style="bright_cyan")
 		# Use dynamic cutoffs for tokens and digits
 		merged_expanded_df['is_likely_cover_raw'] = (
 			(merged_expanded_df['tokens_per_page'] <= merged_signals.raw_dynamic_cutoff.values[0])
@@ -677,6 +889,7 @@ def generate_signal_processing_data(volume_paths_df: pd.DataFrame, output_dir: s
 			'missing_issues': missing_issues,
 			'volume_classification': volume['volume_classification'],
 			'title_classification': volume['title_classification'],
+			"best_smoothed_window_size": best_smoothed_window_size,
 		})
 		
 		# Merge the best_wavelet_dict with volume_data
@@ -833,7 +1046,24 @@ def generate_token_frequency_analysis(should_filter_greater_than_numbers: bool, 
 		figures_dir_path = os.path.join("..", "figures")
 		volume_frequencies = generate_signal_processing_data(volume_paths_df, output_dir=figures_dir_path, should_use_parallel=should_use_parallel, rerun_data=rerun_analysis)
 		# Drop amplitutde and frequency columns for saving file space
-		volume_frequencies = volume_frequencies.drop(columns=['raw_positive_frequencies', 'raw_positive_amplitudes', 'smoothed_positive_frequencies', 'smoothed_positive_amplitudes', 'tokens_per_page', 'page_numbers', 'digits_per_page'])
+		# console.print(volume_frequencies.columns.tolist(), style="bright_cyan")
+		# volume_frequencies = volume_frequencies.drop(columns=['raw_positive_frequencies', 'raw_positive_amplitudes', 'smoothed_positive_frequencies', 'smoothed_positive_amplitudes', 'tokens_per_page', 'page_numbers', 'digits_per_page'])
+		columns_to_drop = [
+			'raw_positive_frequencies',
+			'raw_positive_amplitudes',
+			'smoothed_positive_frequencies',
+			'smoothed_positive_amplitudes',
+			'tokens_per_page',
+			'page_numbers',
+			'digits_per_page'
+		]
+
+		existing_columns_to_drop = [
+			c for c in columns_to_drop if c in volume_frequencies.columns
+		]
+
+		if existing_columns_to_drop:
+			volume_frequencies = volume_frequencies.drop(columns=existing_columns_to_drop)
 		# Save volume frequencies to CSV
 		if os.path.exists(volume_features_output_path):
 			volume_frequencies.to_csv(volume_features_output_path, mode='a', index=False, header=False)

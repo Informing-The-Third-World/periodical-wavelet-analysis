@@ -1,0 +1,3 @@
+signal_type,wavelet,wavelet_energy_entropy,wavelet_sparsity,wavelet_adaptive_threshold,wavelet_psnr,signal_length,decomposition_levels,original_level,padded,emd_value,kl_divergence,wavelet_entropy,avg_variance_across_levels,variance_ratio_across_levels,smoothness,correlation,relative_num_peaks,avg_prominence,prominence_min,prominence_max,relative_peaks,relative_prominences,relative_left_bases,relative_right_bases,prominence_threshold,distance_factor,max_autocorrelation,upper_envelope,lower_envelope,error,wavelet_type,htid
+smoothed,bior3.1,,,,,72,3,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,mdp.39015038717792
+smoothed,bior3.3,,,,,72,3,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,mdp.39015038717792

@@ -346,6 +346,11 @@ def calculate_dynamic_cutoff(
 		if verbose:
 			console.print("[yellow]Signal is empty; returning zero as dynamic cutoff.[/yellow]")
 		return 0.0
+	
+	if peak_amplitude is None:
+		if verbose:
+			console.print("[yellow]No spectral peak detected; dynamic cutoff undefined.[/yellow]")
+		return np.nan, np.nan
 
 	best_cutoff = None
 	final_percentile = None
@@ -399,17 +404,41 @@ def calculate_stft(tokens_signal: np.ndarray, verbose: bool, min_length: int = 1
 		A dictionary containing spectral features and STFT characteristics.
 	"""
 	# Check if the signal is long enough for STFT
-	if len(tokens_signal) < min_length:
+	if tokens_signal is None or len(tokens_signal) < min_length:
 		if verbose:
-			console.print(f"[yellow]Signal length ({len(tokens_signal)}) too short for STFT.[/yellow]")
+			console.print(
+				f"[yellow]Signal length ({len(tokens_signal) if tokens_signal is not None else 0}) "
+				f"too short for STFT. Skipping.[/yellow]"
+			)
 		return {}
 
 	best_result = {}
+	signal_length = len(tokens_signal)
 
 	# Iterate over parameter combinations
 	for window in windows:
-		for nperseg in nperseg_values:
-			noverlap = int(nperseg * noverlap_ratio)  # Compute overlap dynamically
+		for requested_nperseg in nperseg_values:
+			effective_nperseg = min(requested_nperseg, signal_length)
+
+			# STFT requires nperseg >= 2
+			if effective_nperseg < 2:
+				if verbose:
+					console.print(
+						f"[yellow]Skipping STFT: effective_nperseg={effective_nperseg} too small.[/yellow]"
+					)
+				continue
+			# Compute overlap after finalizing nperseg
+			noverlap = int(effective_nperseg * noverlap_ratio)
+			noverlap = min(noverlap, effective_nperseg - 1)
+
+			# Final safety guard (should never trigger, but insurance)
+			if noverlap < 0 or noverlap >= effective_nperseg:
+				if verbose:
+					console.print(
+						f"[yellow]Skipping STFT: invalid overlap "
+						f"(nperseg={effective_nperseg}, noverlap={noverlap}).[/yellow]"
+					)
+				continue
 
 			for snr_threshold in snr_thresholds:
 				for stationarity_threshold in stationarity_thresholds:
@@ -424,8 +453,25 @@ def calculate_stft(tokens_signal: np.ndarray, verbose: bool, min_length: int = 1
 						continue
 
 					# Compute STFT
-					frequencies, times, Zxx = spectrogram(tokens_signal, window=window, nperseg=nperseg, noverlap=noverlap)
+					try:
+						frequencies, times, Zxx = spectrogram(
+							tokens_signal,
+							window=window,
+							nperseg=effective_nperseg,
+							noverlap=noverlap
+						)
+					except ValueError as e:
+						if verbose:
+							console.print(
+								f"[red]STFT failed (window={window}, "
+								f"nperseg={effective_nperseg}, "
+								f"noverlap={noverlap}): {e}[/red]"
+							)
+						continue
+
 					magnitude = np.abs(Zxx)
+					if magnitude.size == 0:
+						continue
 
 					# Compute power spectral density variations to check stationarity
 					psd_variations = np.sum(magnitude, axis=0)
@@ -447,7 +493,7 @@ def calculate_stft(tokens_signal: np.ndarray, verbose: bool, min_length: int = 1
 					dynamic_cutoff, cutoff_percentile = calculate_dynamic_cutoff(
 						tokens_signal=tokens_signal,
 						verbose=verbose,
-						peak_amplitude=spectral_peaks.get("peak_amplitude", 0)
+						peak_amplitude=spectral_peaks.get("peak_amplitude")
 					)
 
 					result = {
@@ -466,7 +512,7 @@ def calculate_stft(tokens_signal: np.ndarray, verbose: bool, min_length: int = 1
 						"stft_snr_threshold": snr_threshold,
 						"stft_stationarity_threshold": stationarity_threshold,
 						"stft_window": window,
-						"stft_nperseg": nperseg,
+						"stft_nperseg": effective_nperseg,
 						"stft_noverlap": noverlap,
 						"stft_dynamic_cutoff": dynamic_cutoff,
 						"stft_dynamic_cutoff_percentile": cutoff_percentile,
@@ -568,7 +614,7 @@ def calculate_fft(
 			dynamic_cutoff, cutoff_percentile = calculate_dynamic_cutoff(
 				tokens_signal=tokens_signal,
 				verbose=verbose,
-				peak_amplitude=spectral_peaks.get("peak_amplitude", 0)
+				peak_amplitude=spectral_peaks.get("peak_amplitude")
 			)
 
 			result = {

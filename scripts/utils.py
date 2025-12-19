@@ -426,43 +426,98 @@ def find_best_smoothing_window(signal: np.ndarray, min_window: int = 3, max_wind
 
 def process_tokens(file_path: str, preidentified_periodical: bool, should_filter_greater_than_numbers: bool, should_filter_implied_zeroes: bool) -> tuple:
 	"""
-	Processes and cleans token-level data extracted from OCR-processed periodicals, preparing it for wavelet analysis.
+	Load, clean, and prepare token-level OCR data from a periodical volume for
+	downstream signal and wavelet analysis.
 
-	The function begins by reading token data from the specified file and applies the process_file function to expand tokens while filtering based on the provided flags. Metadata columns (e.g., enumeration_chronology, pub_date) are included by merging with a corresponding metadata CSV if available. For pre-identified periodicals, additional metadata fields such as start_issue and end_issue are included, and only relevant columns are retained.
+	This function transforms OCR-derived token data into structured, page-aligned
+	signals suitable for spectral, autocorrelation, and wavelet-based methods.
+	It serves as the primary bridge between raw OCR output and signal-processing
+	pipelines used for issue segmentation and diagnostic analysis.
 
-	Token-level data is merged with digit counts to create a comprehensive DataFrame, with missing values filled as zeros for consistency. Token and digit signals are smoothed using a moving average (window size = 5) and then standardized by subtracting the mean and dividing by the standard deviation. As a sanity check, the first two rows of the processed DataFrame are printed using the generate_table utility. Finally, raw and smoothed token frequency signals are extracted as 1D arrays, ensuring no NaN or infinite values, and are prepared for further analysis. We add in a flag for missing values to the DataFrame to track any replacements.
+	The function performs four main tasks:
 
-	Core Assumptions:
-	- Input files must include required columns (e.g., tokens_per_page, page_number), and a metadata CSV must exist for token data if columns like enumeration_chronology are missing.
-	- Pre-identified periodicals provide additional metadata fields that the function incorporates.
-	- The smoothing process (centered moving average, window size = 5) assumes relatively uniform page lengths for meaningful results.
-	- Missing values are replaced with zeros to ensure compatibility with downstream tools.
+	1. **Token expansion and filtering**
+	Reads token-level OCR output from disk and expands it to page-level token
+	counts using `process_file`. Optional filters remove implausible numeric
+	artifacts, such as tokens exceeding plausible page-number ranges or
+	OCR-derived implied zeroes.
+
+	2. **Metadata integration**
+	Bibliographic and structural metadata (e.g., enumeration chronology,
+	publication date) are merged when available. For pre-identified or manually
+	annotated periodicals, additional issue-level metadata (e.g., start_issue,
+	end_issue, type_of_page) is preserved, and only relevant columns are retained.
+
+	3. **Signal construction**
+	Constructs two parallel token-frequency signals:
+	- a *raw* signal (tokens per page), preserving local variation
+	- a *smoothed* signal, generated using a centered moving average with a
+		dynamically selected window size
+
+	Digit-frequency signals are processed analogously to support OCR diagnostics
+	and comparative analysis. The smoothing window is selected via
+	`find_best_smoothing_window`, which balances variance reduction against
+	over-smoothing.
+
+	4. **Data integrity checks and provenance tracking**
+	Missing token and digit values are replaced with zeros to ensure compatibility
+	with downstream spectral methods. Replacement flags are recorded explicitly
+	to preserve provenance. Signals are returned as clean 1D NumPy arrays with
+	NaN and infinite values removed.
+
+	As a sanity check, a small preview of the processed page-level data is printed
+	using the `generate_table` utility.
+
+	Core Assumptions
+	----------------
+	- Input files contain required structural columns (e.g., tokens_per_page,
+	page_number). If metadata fields such as enumeration_chronology are missing,
+	a corresponding metadata CSV must be available.
+	- Pre-identified periodicals provide additional issue-level metadata that the
+	function incorporates.
+	- Page-level token counts are sufficiently regular for centered moving-average
+	smoothing to preserve structural features such as issue boundaries.
+	- Zero-filling is used for numerical stability but tracked explicitly to avoid
+	masking data quality issues.
 
 	Parameters
 	----------
 	file_path : str
-		The path to the file containing the token data.
+		Path to the CSV file containing page-level token data.
 	preidentified_periodical : bool
-		Flag indicating whether the periodical is pre-identified.
+		Whether the periodical has manual issue annotations and enriched metadata.
 	should_filter_greater_than_numbers : bool
-		Flag indicating whether to filter out numbers greater than the max possible page number.
+		Whether to remove numeric tokens exceeding plausible page-number ranges.
 	should_filter_implied_zeroes : bool
-		Flag indicating whether to filter out implied zeroes.
+		Whether to remove OCR-derived implied zero values.
 
 	Returns
 	-------
 	tuple
-		A tuple containing:
-		- `merged_expanded_df` (pd.DataFrame): A DataFrame with token-level data, metadata, 
-		  and processed signal columns, including smoothed and standardized token and digit signals.
-		- `grouped_df` (pd.DataFrame): A grouped version of the expanded DataFrame, often 
-		  useful for aggregating data by specific columns.
-		- `tokens_raw_signal` (np.ndarray): The raw token frequency signal as a 1D array, 
-		  ready for further analysis (e.g., FFT or wavelet transformations).
-		- `tokens_smoothed_signal` (np.ndarray): The smoothed token frequency signal as a 1D 
-		  array, obtained via a moving average.
-		- `best_window_size` (int): The best window size determined for smoothing the signal.
+		A 5-tuple containing:
+
+		- merged_expanded_df (pd.DataFrame)
+			Page-level token and digit data with merged metadata and smoothed signal
+			columns.
+		- grouped_df (pd.DataFrame)
+			Grouped token data, used for annotation alignment and visualization.
+		- tokens_raw_signal (np.ndarray)
+			Raw token-frequency signal (tokens per page).
+		- tokens_smoothed_signal (np.ndarray)
+			Smoothed token-frequency signal using the selected window size.
+		- best_window_size (int)
+			Window size selected for smoothing based on a variance–smoothness
+			tradeoff.
+
+	Notes
+	-----
+	- Raw and smoothed signals preserve page alignment.
+	- No stationarity enforcement is performed here; stationarity testing and
+	preprocessing occur downstream.
+	- This function deliberately prioritizes signal transparency over early
+	normalization to allow later evaluation of preprocessing choices.
 	"""
+
 	expanded_df, subset_digits, grouped_df = process_file(file_path, preidentified_periodical, should_filter_greater_than_numbers, should_filter_implied_zeroes)
 	
 	# Merge metadata if not already present

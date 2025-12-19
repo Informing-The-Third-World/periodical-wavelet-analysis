@@ -6,70 +6,198 @@ This project applies wavelet transformations to analyze token frequency signals 
 
 ### 1. Token Extraction & Signal Processing
 
-The first step is extracting token frequency signals from periodical text. This is handled in:
+The first stage of the pipeline constructs page-aligned token-frequency signals from OCR-processed periodical volumes. This stage is responsible for transforming raw token output into clean, interpretable signals suitable for downstream spectral and wavelet analysis. No stationarity enforcement or frequency-domain analysis occurs at this stage.
 
-- `generate_signal_processing_data()`: Loads periodical data and prepares it for token extraction. The function is in the `generate_token_frequency_wavelet_analysis.py` script. It is the main entry point for processing periodicals.
-- `process_tokens()`: Extracts raw and smoothed token frequency signals to capture overall trends while reducing noise. The function is in the `utils.py` script.
-- `find_best_smoothing_window()`: To generate the smoothed token frequency, we determine the **optimal window size** for moving average smoothing. We compare a **fixed window size** (default = 5) with **dynamic window sizes** ranging from `min_window` to `max_window`. We select the window size that achieves the best balance of variance reduction and smoothness. The function is in the `utils.py` script.
+This process is orchestrated by:
+
+1. `generate_signal_processing_data()` The main entry point for per-volume signal construction. This function iterates over all volumes for a given periodical, loads token-level data, and coordinates signal construction, preprocessing decisions, and downstream analysis. It lives in `generate_token_frequency_wavelet_analysis.py`.
+
+For each volume, it:
+
+- loads OCR-derived token data
+- invokes `process_tokens()` to construct raw and smoothed signals
+- prepares signal metadata for later stationarity testing and wavelet evaluation
+
+2. `process_tokens()` Loads, cleans, and prepares token-level OCR data for signal analysis. This function expands token data to page-level counts, integrates bibliographic and structural metadata when available, and constructs two parallel token-frequency signals:
+
+- a raw signal (tokens per page), preserving local variation
+- a smoothed signal, designed to reduce high-frequency noise while preserving structural boundaries (e.g., issue breaks)
+Digit-frequency signals are processed in parallel to support OCR diagnostics. Missing values are replaced with zeros, with replacement flags recorded to preserve provenance. The function returns clean 1D NumPy arrays aligned by page number. This function lives in `utils.py`.
+
+3. `find_best_smoothing_window()`
+Determines the optimal moving-average window size used to generate the smoothed token signal. Rather than relying on a fixed window, this function evaluates a range of candidate window sizes and selects the one that best balances variance reduction against over-smoothing, using a combined variance–smoothness criterion. This allows smoothing behavior to adapt to differences in periodical layout and page density. This function lives in `utils.py`.
+
+Together, these functions establish the signal substrate for all subsequent analysis stages, including stationarity testing, FFT-based diagnostics, and wavelet-based segmentation.
 
 ### 2. Stationarity Testing
 
-Before applying wavelet transformations, we check if the token frequency signal is **stationary**—meaning its statistical properties (e.g., mean and variance) remain constant over time. Stationarity is crucial because:
+Before applying wavelet transformations, we check if the token frequency signal is **stationary**—meaning its statistical properties (e.g., mean and variance) remain constant over time, which in our case is pages in a periodical volume. Stationarity is crucial because:
 
-- **Wavelet selection depends on stationarity**: Some wavelet methods assume stationarity, while others perform better on non-stationary signals.
+- **Wavelet selection depends on stationarity**: Certain wavelet transforms (notably DWT and SWT) assume approximate stationarity, while others (e.g., CWT) are more robust to non-stationary structure.
 - **Segmenting periodicals effectively**: Stationary signals might indicate consistent writing or typesetting, while non-stationary signals may suggest changes in style, OCR artifacts, or layout shifts.
+
+Stationarity testing is performed independently for **raw and smoothed** signals.
 
 ---
 
-#### **Stationarity Tests and Their Interpretation**
+#### **Interpreting Stationarity Tests Through Periodicals**
 
-We use the following statistical tests to assess stationarity:
+We use the following three statistical tests as complementary diagnostics to assess stationarity:
 
-- **Augmented Dickey-Fuller (ADF) Test**:  
-  - Checks if a signal has a **unit root**, which indicates non-stationarity.
-  - If the **p-value is significant** (≤ `0.05`), we reject the null hypothesis, meaning the signal **is stationary**.
-  - If the **p-value is not significant**, the signal is **non-stationary** and likely contains sharp changes or trends.
+**Augmented Dickey-Fuller (ADF) Test**: *AKA “Does this volume drift over time?” Test.*
 
-- **Kwiatkowski-Phillips-Schmidt-Shin (KPSS) Test**:  
-  - Checks if a signal is **trend-stationary** (i.e., stationary after removing a deterministic trend).
-  - If the **p-value is significant** (≤ `0.05`), the signal is **non-stationary**.
-  - If the **p-value is not significant**, the signal **is stationary** and does not contain deterministic trends.
+Technically ADF checks the following:
 
-- **Autocorrelation Test**:
-  - Checks for autocorrelation in the signal, which is a measure of how similar a signal is to a lagged version of itself (i.e., how much the past predicts the future).
-  - High autocorrelation at multiple lags suggests the signal is persistent and likely non-stationary (e.g., periodic or slowly changing signals). Low autocorrelation across all tested lags suggests the signal fluctuates randomly, meaning it is likely stationary. To put it more plainly, if we were sampling data from the future to predict the past, then we would expect a low autocorrelation score if the data is very similar across time. If the data is very different across time, then we would expect a high autocorrelation score.
+- Checks if a signal has a **unit root**, which indicates non-stationarity.
+- If the **p-value is significant** (≤ `0.05`), we reject the null hypothesis, meaning the signal **is stationary**.
+- If the **p-value is not significant**, the signal is **non-stationary** and likely contains sharp changes or trends.
 
-**Interpreting the Combined Results:**
+But in periodical terms, what the ADF test really asks: Does the number of tokens per page steadily drift upward or downward as we move through the volume? A non-stationary result often corresponds to:
 
-To determine stationarity, we combine insights from ADF, KPSS, and autocorrelation:
+- gradual layout changes (e.g., more advertisements later in the year),
+- shifts in editorial density,
+- OCR artifacts accumulating as page quality deteriorates,
+- or structural transitions between issues (front matter vs. body vs. back matter).
+
+If ADF rejects non-stationarity, it suggests that—despite local fluctuations—the volume does not exhibit a persistent directional trend. In other words, pages later in the volume do not systematically look “heavier” or “lighter” in text than earlier ones.
+
+For our purposes, this means the signal is stable enough to compare patterns across issues without first removing a global drift.
+
+**Kwiatkowski-Phillips-Schmidt-Shin (KPSS) Test**: *AKA “Is this volume stable once we ignore a slow editorial trend?”*
+
+Technically KPSS checks the following:
+
+- Checks if a signal is **trend-stationary** (i.e., stationary after removing a deterministic trend).
+- If the **p-value is significant** (≤ `0.05`), the signal is **non-stationary**.
+- If the **p-value is not significant**, the signal **is stationary** and does not contain deterministic trends.
+
+But if we translate this to periodicals, KPSS asks a slightly different question than ADF: If we ignore a slow, predictable trend (for example, seasonal expansion or contraction), does the page-level structure remain stable?
+
+In periodicals, this captures cases where:
+
+- the publication gradually increases in size over the year,
+- the editorial mix shifts predictably (e.g., wartime issues becoming denser),
+- but within that trend, issue structure remains regular.
+
+If KPSS indicates non-stationarity, it suggests that even after accounting for slow trends, the signal still changes too much to be treated as stable—often a sign of major structural heterogeneity.
+
+In practice, KPSS helps distinguish:
+
+- “This volume slowly grows but is otherwise regular”
+from
+- “This volume is structurally inconsistent throughout.”
+
+**Autocorrelation Test**: *AKA “Do nearby pages resemble each other too strongly?”*
+
+Technically, autocorrelation measures:
+
+- Checks for autocorrelation in the signal, which is a measure of how similar a signal is to a lagged version of itself (i.e., how much the past predicts the future).
+- High autocorrelation at multiple lags suggests the signal is persistent and likely non-stationary (e.g., periodic or slowly changing signals). Low autocorrelation across all tested lags suggests the signal fluctuates randomly, meaning it is likely stationary. To put it more plainly, if we were sampling data from the future to predict the past, then we would expect a low autocorrelation score if the data is very similar across time. If the data is very different across time, then we would expect a high autocorrelation score.
+
+In periodical terms, autocorrelation measures how much a page’s token count resembles nearby pages.
+
+High autocorrelation means:
+
+- adjacent pages look very similar,
+- suggesting long runs of the same layout or content type (e.g., serialized fiction, dense advertising blocks, or repeated OCR errors).
+
+Low autocorrelation means:
+
+- pages vary more independently,
+- consistent with alternating sections, issue boundaries, or mixed content.
+
+We use autocorrelation conservatively. It does not replace statistical tests, but it helps resolve ambiguous cases by asking:
+
+Is this signal dominated by persistence (long stretches of sameness), or does it fluctuate in a way consistent with issue-level structure?
+
+Low autocorrelation across multiple lags supports treating the signal as effectively stationary for segmentation purposes.
+
+---
+
+##### **Interpreting Stationarity: A Combined Decision Framework**
+
+Rather than relying on a single statistical test, stationarity is assessed by jointly interpreting the results of the Augmented Dickey–Fuller (ADF) test, the Kwiatkowski–Phillips–Schmidt–Shin (KPSS) test, and autocorrelation diagnostics. Each test captures a different aspect of temporal stability in page-level token patterns, and no single result is treated as definitive in isolation.
 
 | **ADF Test** | **KPSS Test** | **Autocorrelation** | **Conclusion** |
 |-------------|-------------|-------------------|---------------|
-| ✅ Significant (p ≤ 0.05) | ❌ Not significant | **Low at all lags** (≤ 0.1) | **Stationary** |
-| ❌ Not significant | ✅ Significant (p ≤ 0.05) | **High at all lags** (≥ 0.8) | **Non-stationary** |
-| ✅ Significant | ✅ Significant | **Varied** | **Trend-stationary (may require detrending)** |
-| ❌ Not significant | ❌ Not significant | **Low at all lags** (≤ 0.1) | **Stationary (confirmed by low autocorrelation)** |
-| ❌ Not significant | ❌ Not significant | **High at all lags** (≥ 0.8) | **Likely non-stationary (suggests persistence)** |
+| ✅ Significant (p ≤ 0.05) | ❌ Not significant | Low at all lags (≤ 0.1) | **Stationary** |
+| ❌ Not significant | ✅ Significant (p ≤ 0.05) | High at all lags (≥ 0.8) | **Non-stationary** |
+| ✅ Significant | ✅ Significant | Varied | **Trend-stationary (may require detrending)** |
+| ❌ Not significant | ❌ Not significant | Low at all lags (≤ 0.1) | **Stationary (confirmed by low autocorrelation)** |
+| ❌ Not significant | ❌ Not significant | High at all lags (≥ 0.8) | **Likely non-stationary (suggests persistence)** |
+
+To make the logic more understandable, here is a summary of the combined decision framework.
+
+ADF and KPSS results are interpreted jointly:
+
+- If ADF rejects non-stationarity and KPSS does not reject stationarity, the signal is treated as stationary.
+- If both tests reject, the signal likely contains structured trends and is treated as non-stationary, triggering preprocessing.
+- If both tests fail to reject, the result is ambiguous; autocorrelation is used as a secondary diagnostic.
+- If ADF and KPSS disagree, preprocessing is preferred over assuming stationarity.
+
+Autocorrelation is consulted only when statistical tests are inconclusive. It acts as a conservative safeguard rather than a primary decision rule, helping distinguish genuinely fluctuating signals from highly persistent or repetitive ones.
+
+Rather than asking an abstract statistical question, the combined stationarity tests effectively ask: *Can different parts of this volume be meaningfully compared as variations on the same underlying structure?*
+
+If the answer is yes:
+
+- stationarity-sensitive wavelet transforms (e.g., DWT, SWT) are applied.
+
+If the answer is no:
+
+- minimal preprocessing (detrending or differencing) is attempted,
+- or the analysis defaults to transforms designed for non-stationary signals (e.g., CWT).
+
+Crucially, stationarity here is not a claim about editorial intent or historical uniformity. It is a pragmatic assessment of whether page-level token patterns can be analyzed using methods that assume structural comparability, rather than being dominated by drift, degradation, or long-range persistence.
 
 ---
 
 #### **Adaptive Testing Strategy**
 
-Since stationarity assessments can be sensitive to parameter choices, we test across multiple configurations:
+In this project, stationarity is not treated as an abstract statistical property, but as a practical question about whether different parts of a periodical volume can be meaningfully compared. Page-level token counts often vary for many reasons: issue boundaries, layout changes, advertising sections, OCR degradation, or shifts in editorial density. Our stationarity tests ask whether these variations reflect a stable underlying structure—or whether the signal drifts or persists in ways that would make comparisons misleading. By combining multiple statistical tests with conservative diagnostics, we determine whether a volume’s page-by-page token patterns can be analyzed using methods that assume structural comparability, or whether minimal preprocessing or alternative transforms are needed. Stationarity here is therefore a methodological judgment about analytical suitability, not a claim about editorial consistency or historical intent.
 
-- **Iterating Over `max_lag` Values (`max_lag=[5, 10, 15]`)**:  
-  - The ADF test requires a lag parameter to account for autocorrelation.
-  - We evaluate the signal at **multiple lags**, ensuring that results are not sensitive to a single choice.
-  - The best `max_lag` yielding stationarity is recorded.
+Because stationarity assessments are sensitive to parameter choices and can vary across statistical tests, this project adopts an adaptive, multi-step testing strategy rather than relying on a single configuration or decision rule.
 
-- **Evaluating Autocorrelation Across Lags (`max_lag=[1, 5, 10]`)**:  
-  - We assess autocorrelation at multiple lags to ensure consistent stationarity results.
-  - If we have high autocorrelaiton across all lags, then we are likely dealing with a non-stationary signal. If we have low autocorrelation across all lags, then we are likely dealing with a stationary signal.
+**Iterating Over ADF Lag Parameters**
 
-- **Returning Detailed Interpretations**:  
-  - Each test result includes an explanation of the statistical decision.
-  - If different `max_lag` values produce different results, the most stationary-friendly result is used.
-  - If ADF and KPSS tests disagree, we use autocorrelation to resolve the conflict.
+The ADF test requires specifying a lag parameter to account for autocorrelation in the signal. Rather than fixing this value arbitrarily, we evaluate stationarity across multiple lag settings:
+
+- ADF max_lag values tested: max_lag ∈ [5, 10, 15]
+
+For each lag setting, ADF and KPSS results are evaluated jointly. The testing procedure terminates early once a configuration yields a clear stationary decision under the combined ADF–KPSS criteria. This avoids overfitting to a single lag choice while keeping the procedure computationally efficient.
+
+The max_lag value associated with the accepted result is recorded as metadata for downstream analysis.
+
+**Autocorrelation as a Secondary Diagnostic**
+
+Autocorrelation is evaluated separately from ADF/KPSS and is used only when statistical test results are ambiguous or conflicting:
+
+- Autocorrelation lags evaluated: lag ∈ [1, 5, 10]
+
+Rather than serving as a primary stationarity test, autocorrelation acts as a conservative safeguard. Low autocorrelation across all tested lags supports treating the signal as effectively stationary, while consistently high autocorrelation suggests persistence or repetition that undermines stationarity assumptions.
+
+Importantly, autocorrelation does not override clear ADF–KPSS outcomes; it is consulted only when those tests fail to provide a decisive answer.
+
+**Returning Interpretable Results**
+
+Each stationarity assessment returns a structured result that includes:
+
+- ADF and KPSS test statistics and p-values
+- The selected ADF max_lag (if applicable)
+- Autocorrelation values across tested lags
+- A human-readable interpretation describing the decision logic
+
+This information is preserved alongside the processed signal and used to guide subsequent preprocessing and wavelet selection.
+
+**Scope of Stationarity Testing**
+
+Stationarity testing in this pipeline refers specifically to:
+
+- ADF
+- KPSS
+- Autocorrelation diagnostics
+
+Additional checks performed elsewhere in the pipeline (e.g., SNR thresholds or power spectral density variation checks used in FFT/STFT analysis) are not stationarity tests in the statistical sense. They serve instead as quality controls for spectral feature extraction and are documented separately.
 
 ---
 

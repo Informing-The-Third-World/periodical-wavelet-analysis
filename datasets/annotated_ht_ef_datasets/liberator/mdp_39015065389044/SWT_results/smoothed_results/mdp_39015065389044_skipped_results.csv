@@ -127,8 +127,6 @@ db31,Max level too low for wavelet db31 and signal length 371.,371,smoothed,0,SW
 db31,Max level too low for wavelet db31 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 db32,Max level too low for wavelet db32 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 db32,Max level too low for wavelet db32 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
-db33,Max level too low for wavelet db33 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
-db33,Max level too low for wavelet db33 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 db34,Max level too low for wavelet db34 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 db34,Max level too low for wavelet db34 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 db35,Max level too low for wavelet db35 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
@@ -143,14 +141,16 @@ dmey,Max level too low for wavelet dmey and signal length 371.,371,smoothed,0,SW
 dmey,Max level too low for wavelet dmey and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 haar,Max level too low for wavelet haar and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 haar,Max level too low for wavelet haar and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
+db33,Max level too low for wavelet db33 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
+db33,Max level too low for wavelet db33 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 rbio1.1,Max level too low for wavelet rbio1.1 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 rbio1.1,Max level too low for wavelet rbio1.1 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 rbio1.3,Max level too low for wavelet rbio1.3 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 rbio1.3,Max level too low for wavelet rbio1.3 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
-rbio1.5,Max level too low for wavelet rbio1.5 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
-rbio1.5,Max level too low for wavelet rbio1.5 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 rbio2.2,Max level too low for wavelet rbio2.2 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 rbio2.2,Max level too low for wavelet rbio2.2 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
+rbio1.5,Max level too low for wavelet rbio1.5 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
+rbio1.5,Max level too low for wavelet rbio1.5 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 rbio2.4,Max level too low for wavelet rbio2.4 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 rbio2.4,Max level too low for wavelet rbio2.4 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
 rbio2.6,Max level too low for wavelet rbio2.6 and signal length 371.,371,smoothed,0,SWT,mdp.39015065389044
