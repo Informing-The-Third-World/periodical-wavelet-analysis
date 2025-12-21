@@ -100,12 +100,12 @@
             "removal_reason": null,
             "was_log_transformed": false,
             "low_variance_detected": false,
-            "all_mean": 207.47806461572466,
-            "all_std": 146.78669769193553,
+            "all_mean": 207.47816714815744,
+            "all_std": 146.78677589609802,
             "all_max": 325.70779686028493,
             "all_min": -47.39494037946358,
-            "mean_normalized": 0.6831174889810895,
-            "std_normalized": 0.3934216585433767,
+            "mean_normalized": 0.6831177637912759,
+            "std_normalized": 0.39342186814827823,
             "max_normalized": 1.0,
             "min_normalized": 0.0
         },
@@ -976,5 +976,5 @@
         "all_wavelet_signal_normalized_weighted_rank"
     ],
     "all_selected_family_rank_stability_column": "all_family_informed_rank",
-    "all_selected_family_rank_stability_column_correlation": 0.999982031504162
+    "all_selected_family_rank_stability_column_correlation": 0.9999819746334211
 }

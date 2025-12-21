@@ -1,10 +1,10 @@
-signal_type,wavelet,wavelet_energy_entropy,wavelet_sparsity,wavelet_adaptive_threshold,wavelet_psnr,signal_length,decomposition_levels,original_level,padded,emd_value,kl_divergence,wavelet_entropy,avg_variance_across_levels,variance_ratio_across_levels,smoothness,correlation,relative_num_peaks,avg_prominence,prominence_min,prominence_max,relative_peaks,relative_prominences,relative_left_bases,relative_right_bases,prominence_threshold,distance_factor,max_autocorrelation,upper_envelope,lower_envelope,error,wavelet_type,htid
-smoothed,bior5.5,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
-smoothed,db3,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
-smoothed,rbio3.9,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
-smoothed,sym3,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
-smoothed,sym7,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
-smoothed,sym14,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
-smoothed,sym16,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
-smoothed,sym12,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
-smoothed,sym20,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
+signal_type,wavelet,wavelet_energy_entropy,wavelet_sparsity,wavelet_adaptive_threshold,wavelet_psnr,signal_length,decomposition_levels,original_level,padded,emd_value,kl_divergence,change_point_indices,change_point_prominences,num_change_points,wavelet_entropy,avg_variance_across_levels,variance_ratio_across_levels,smoothness,correlation,relative_num_peaks,avg_prominence,prominence_min,prominence_max,relative_peaks,relative_prominences,relative_left_bases,relative_right_bases,prominence_threshold,distance_factor,max_autocorrelation,upper_envelope,lower_envelope,error,wavelet_type,htid
+smoothed,bior5.5,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
+smoothed,db3,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
+smoothed,rbio3.9,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
+smoothed,sym3,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
+smoothed,sym7,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
+smoothed,sym14,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
+smoothed,sym12,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
+smoothed,sym16,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412
+smoothed,sym20,,,,,104,3,,,,,,,,,,,,,,,,,,,,,,,,,,Stationarity changed after decomposition,SWT,inu.30000003214412

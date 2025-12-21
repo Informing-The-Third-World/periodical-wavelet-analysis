@@ -50,9 +50,9 @@
             "across_std": 2.927487487283141e-06,
             "across_max": 1.1890011511955224e-05,
             "across_min": 5.018903399008278e-07,
-            "mean_normalized": 0.23844939876143842,
+            "mean_normalized": 0.23844939876143836,
             "std_normalized": 0.2570650103782684,
-            "max_normalized": 1.0000000000000002,
+            "max_normalized": 1.0,
             "min_normalized": 0.0
         },
         {

@@ -952,5 +952,5 @@
         "across_wavelet_signal_normalized_weighted_rank"
     ],
     "across_selected_family_rank_stability_column": "across_family_informed_rank",
-    "across_selected_family_rank_stability_column_correlation": 0.9999986582119996
+    "across_selected_family_rank_stability_column_correlation": 0.9999986593623923
 }

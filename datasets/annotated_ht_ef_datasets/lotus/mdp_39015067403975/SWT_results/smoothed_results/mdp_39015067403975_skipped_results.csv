@@ -35,8 +35,6 @@ coif2,Max level too low for wavelet coif2 and signal length 209.,209,smoothed,0,
 coif2,Max level too low for wavelet coif2 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif3,Max level too low for wavelet coif3 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif3,Max level too low for wavelet coif3 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
-coif4,Max level too low for wavelet coif4 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
-coif4,Max level too low for wavelet coif4 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif5,Max level too low for wavelet coif5 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif5,Max level too low for wavelet coif5 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif6,Max level too low for wavelet coif6 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
@@ -45,14 +43,16 @@ coif7,Max level too low for wavelet coif7 and signal length 209.,209,smoothed,0,
 coif7,Max level too low for wavelet coif7 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif8,Max level too low for wavelet coif8 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif8,Max level too low for wavelet coif8 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
+coif4,Max level too low for wavelet coif4 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
+coif4,Max level too low for wavelet coif4 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif9,Max level too low for wavelet coif9 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif9,Max level too low for wavelet coif9 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif10,Max level too low for wavelet coif10 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif10,Max level too low for wavelet coif10 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
-coif11,Max level too low for wavelet coif11 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
-coif11,Max level too low for wavelet coif11 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif12,Max level too low for wavelet coif12 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif12,Max level too low for wavelet coif12 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
+coif11,Max level too low for wavelet coif11 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
+coif11,Max level too low for wavelet coif11 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif13,Max level too low for wavelet coif13 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif13,Max level too low for wavelet coif13 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 coif14,Max level too low for wavelet coif14 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
@@ -89,10 +89,10 @@ db12,Max level too low for wavelet db12 and signal length 209.,209,smoothed,0,SW
 db12,Max level too low for wavelet db12 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db13,Max level too low for wavelet db13 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db13,Max level too low for wavelet db13 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
-db14,Max level too low for wavelet db14 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
-db14,Max level too low for wavelet db14 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db15,Max level too low for wavelet db15 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db15,Max level too low for wavelet db15 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
+db14,Max level too low for wavelet db14 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
+db14,Max level too low for wavelet db14 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db16,Max level too low for wavelet db16 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db16,Max level too low for wavelet db16 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db17,Max level too low for wavelet db17 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
@@ -105,8 +105,6 @@ db20,Max level too low for wavelet db20 and signal length 209.,209,smoothed,0,SW
 db20,Max level too low for wavelet db20 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db21,Max level too low for wavelet db21 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db21,Max level too low for wavelet db21 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
-db22,Max level too low for wavelet db22 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
-db22,Max level too low for wavelet db22 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db23,Max level too low for wavelet db23 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db23,Max level too low for wavelet db23 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db24,Max level too low for wavelet db24 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
@@ -131,6 +129,8 @@ db33,Max level too low for wavelet db33 and signal length 209.,209,smoothed,0,SW
 db33,Max level too low for wavelet db33 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db34,Max level too low for wavelet db34 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db34,Max level too low for wavelet db34 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
+db22,Max level too low for wavelet db22 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
+db22,Max level too low for wavelet db22 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db35,Max level too low for wavelet db35 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db35,Max level too low for wavelet db35 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 db36,Max level too low for wavelet db36 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
@@ -181,8 +181,6 @@ sym4,Max level too low for wavelet sym4 and signal length 209.,209,smoothed,0,SW
 sym4,Max level too low for wavelet sym4 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 sym5,Max level too low for wavelet sym5 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 sym5,Max level too low for wavelet sym5 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
-sym6,Max level too low for wavelet sym6 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
-sym6,Max level too low for wavelet sym6 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 sym7,Max level too low for wavelet sym7 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 sym7,Max level too low for wavelet sym7 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 sym8,Max level too low for wavelet sym8 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
@@ -195,6 +193,8 @@ sym11,Max level too low for wavelet sym11 and signal length 209.,209,smoothed,0,
 sym11,Max level too low for wavelet sym11 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 sym12,Max level too low for wavelet sym12 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 sym12,Max level too low for wavelet sym12 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
+sym6,Max level too low for wavelet sym6 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
+sym6,Max level too low for wavelet sym6 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 sym13,Max level too low for wavelet sym13 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 sym13,Max level too low for wavelet sym13 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975
 sym14,Max level too low for wavelet sym14 and signal length 209.,209,smoothed,0,SWT,mdp.39015067403975

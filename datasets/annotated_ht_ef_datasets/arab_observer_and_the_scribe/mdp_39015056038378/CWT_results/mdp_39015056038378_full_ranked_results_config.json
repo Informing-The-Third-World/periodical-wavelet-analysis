@@ -23,7 +23,7 @@
             "across_std": 21880.192837903574,
             "across_max": 98846.71885291557,
             "across_min": 28272.69237645391,
-            "mean_normalized": 0.3165099029978068,
+            "mean_normalized": 0.31650990299780685,
             "std_normalized": 0.31003180532998514,
             "max_normalized": 1.0,
             "min_normalized": 0.0
@@ -255,12 +255,12 @@
             "was_log_transformed": false,
             "low_variance_detected": false,
             "across_mean": -1982150.4776206675,
-            "across_std": 179243.04630438617,
+            "across_std": 179243.04630438605,
             "across_max": -1816485.0991633884,
             "across_min": -2228692.67197024,
-            "mean_normalized": 0.5981020500685821,
-            "std_normalized": 0.4348368592160101,
-            "max_normalized": 0.9999999999999998,
+            "mean_normalized": 0.5981020500685824,
+            "std_normalized": 0.43483685921600995,
+            "max_normalized": 1.0,
             "min_normalized": 0.0
         },
         {

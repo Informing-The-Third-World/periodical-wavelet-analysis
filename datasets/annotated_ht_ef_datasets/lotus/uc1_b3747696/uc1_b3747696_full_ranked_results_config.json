@@ -127,12 +127,12 @@
             "removal_reason": null,
             "was_log_transformed": false,
             "low_variance_detected": false,
-            "all_mean": 6.744524122280368,
-            "all_std": 1.6003174625133263,
+            "all_mean": 6.7444308069055,
+            "all_std": 1.6003496073223176,
             "all_max": 13.881977863263923,
             "all_min": 3.676908425248146,
-            "mean_normalized": 0.3005972390158155,
-            "std_normalized": 0.15681593077180317,
+            "mean_normalized": 0.3005880949942647,
+            "std_normalized": 0.15681908065815978,
             "max_normalized": 1.0,
             "min_normalized": 0.0
         },
@@ -154,12 +154,12 @@
             "removal_reason": null,
             "was_log_transformed": false,
             "low_variance_detected": false,
-            "all_mean": 9183760.663739774,
-            "all_std": 19004122.94494115,
+            "all_mean": 9183731.807792313,
+            "all_std": 19004125.900167648,
             "all_max": 313155402.0425844,
             "all_min": 13.868556236584736,
-            "mean_normalized": 0.029326485003923687,
-            "std_normalized": 0.06068592035331701,
+            "mean_normalized": 0.029326392858143827,
+            "std_normalized": 0.060685929790250295,
             "max_normalized": 1.0,
             "min_normalized": 0.0
         },
@@ -235,12 +235,12 @@
             "removal_reason": null,
             "was_log_transformed": false,
             "low_variance_detected": false,
-            "all_mean": 140976.37103098695,
-            "all_std": 334524.5085931041,
+            "all_mean": 140962.52720431876,
+            "all_std": 334527.9844837311,
             "all_max": 4182959.463819477,
             "all_min": 51343.54033384674,
-            "mean_normalized": 0.0216943763304895,
-            "std_normalized": 0.08096699083076508,
+            "mean_normalized": 0.021691025625359947,
+            "std_normalized": 0.08096783212160417,
             "max_normalized": 0.9999999999999999,
             "min_normalized": 0.0
         },
@@ -976,5 +976,5 @@
         "all_wavelet_signal_normalized_weighted_rank"
     ],
     "all_selected_family_rank_stability_column": "all_family_informed_rank",
-    "all_selected_family_rank_stability_column_correlation": 0.9999729799403324
+    "all_selected_family_rank_stability_column_correlation": 0.9999729948024799
 }

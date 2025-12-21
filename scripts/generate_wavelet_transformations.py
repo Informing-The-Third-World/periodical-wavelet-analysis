@@ -13,6 +13,7 @@ from rich.console import Console
 import pywt
 from scipy.stats import wasserstein_distance
 from scipy.special import rel_entr
+from scipy.signal import find_peaks
 from skimage.metrics import peak_signal_noise_ratio as psnr
 
 # Local application imports
@@ -30,6 +31,48 @@ warnings.filterwarnings('ignore')
 console = Console()
 
 ## WAVELET SIGNAL ANALYSIS CODE
+def detect_change_points_from_signal(
+    signal: np.ndarray,
+    prominence: float,
+    distance: int
+) -> dict:
+    """
+    Detect explicit change-point candidates from a reconstructed wavelet signal.
+
+    Returns indices in signal space (page indices).
+
+	Parameters:
+	-----------
+	signal : np.ndarray
+		Input signal from which to detect change points.
+	prominence : float
+		Minimum prominence of peaks to be considered as change points.
+	distance : int
+		Minimum distance between peaks.
+	Returns:
+	--------
+	dict
+		Dictionary containing:
+		- "indices": List of indices of detected change points.
+		- "prominences": List of prominences of the detected change points.
+    """
+    if signal is None or len(signal) == 0:
+        return {
+            "indices": [],
+            "prominences": []
+        }
+
+    peaks, props = find_peaks(
+        np.abs(signal),
+        prominence=prominence,
+        distance=max(1, distance)
+    )
+
+    return {
+        "indices": peaks.tolist(),
+        "prominences": props.get("prominences", []).tolist()
+    }
+
 def process_wavelet_results(results: list, skipped_results: list, signal_type: str, metrics: list = ['wavelet_energy_entropy', 'wavelet_sparsity']) -> tuple:
 	"""
 	Process and clean wavelet results, handling infinite or NaN values and combining skipped results.
@@ -53,7 +96,19 @@ def process_wavelet_results(results: list, skipped_results: list, signal_type: s
 		- combined_skipped_results_df: pd.DataFrame
 		  DataFrame containing combined skipped and error results.
 	"""
-	total_results = pd.DataFrame(results)
+	total_results = results if isinstance(results, pd.DataFrame) else pd.DataFrame(results)
+	skipped_results_df = skipped_results if isinstance(skipped_results, pd.DataFrame) else pd.DataFrame(skipped_results)
+
+	LIST_COLUMNS = [
+		"change_point_indices",
+		"change_point_prominences"
+	]
+
+	for col in LIST_COLUMNS:
+		if col in total_results.columns:
+			total_results[col] = total_results[col].apply(
+				lambda x: x if isinstance(x, list) else []
+			)
 
 	# Check if the specified metrics columns are in the DataFrame
 	missing_metrics = [metric for metric in metrics if metric not in total_results.columns]
@@ -67,7 +122,6 @@ def process_wavelet_results(results: list, skipped_results: list, signal_type: s
 
 	# Combine skipped results and invalid rows
 	error_results = total_results[~total_results.index.isin(cleaned_results_df.index)]
-	skipped_results_df = pd.DataFrame(skipped_results)
 	combined_skipped_results_df = pd.concat([error_results, skipped_results_df], ignore_index=True)
 	console.print(f"Total skipped results for {signal_type}: {len(combined_skipped_results_df)}", style="bright_red")
 	if len(cleaned_results_df) == 0:
@@ -263,6 +317,18 @@ def process_dwt_wavelet(signal: np.ndarray, wavelet: str, modes: list, signal_ty
 						use_signal_type=f"{signal_type}",
 						verbose=False
 					)
+					# Change-point detection from reconstructed signal
+					change_points = detect_change_points_from_signal(
+						signal=reconstructed_signal,
+						prominence=reconstructed_signal_metrics.get("prominence_threshold", 0.1),
+						distance=max(
+							1,
+							len(reconstructed_signal) // max(
+								reconstructed_signal_metrics.get("distance_factor", 20),
+								1
+							)
+						)
+					)
 
 					results.append({
 						'wavelet': wavelet,
@@ -277,6 +343,9 @@ def process_dwt_wavelet(signal: np.ndarray, wavelet: str, modes: list, signal_ty
 						'signal_type': signal_type,
 						'emd_value': emd_value,
 						'kl_divergence': kl_div_value,
+						'change_point_indices': change_points['indices'],
+						'change_point_prominences': change_points['prominences'],
+						'num_change_points': len(change_points['indices']),
 						**additional_features,
 						**reconstructed_signal_metrics
 					})
@@ -448,6 +517,18 @@ def process_cwt_wavelet(signal: np.ndarray, wavelet: str, scales: np.ndarray, si
 			use_signal_type=f"{signal_type}",
 			verbose=False
 		)
+		# Change-point detection from reconstructed signal
+		change_points = detect_change_points_from_signal(
+			signal=reconstructed_signal,
+			prominence=reconstructed_signal_metrics.get("prominence_threshold", 0.1),
+			distance=max(
+				1,
+				len(reconstructed_signal) // max(
+					reconstructed_signal_metrics.get("distance_factor", 20),
+					1
+				)
+			)
+		)
 		# Append Results
 		results.append({
 			'signal_type': signal_type,
@@ -461,6 +542,9 @@ def process_cwt_wavelet(signal: np.ndarray, wavelet: str, scales: np.ndarray, si
 			'emd_value': emd_value,
 			'kl_divergence': kl_div_value,
 			'is_complex': is_complex,
+			'change_point_indices': change_points['indices'],
+			'change_point_prominences': change_points['prominences'],
+			'num_change_points': len(change_points['indices']),
 			**additional_features,
 			**reconstructed_signal_metrics
 		})
@@ -647,6 +731,18 @@ def process_swt_wavelet(signal: np.ndarray, wavelet: str, signal_type: str, max_
 			use_signal_type=f"{signal_type}",
 			verbose=False
 		)
+		# Change-point detection from reconstructed signal
+		change_points = detect_change_points_from_signal(
+			signal=reconstructed_signal,
+			prominence=reconstructed_signal_metrics.get("prominence_threshold", 0.1),
+			distance=max(
+				1,
+				len(reconstructed_signal) // max(
+					reconstructed_signal_metrics.get("distance_factor", 20),
+					1
+				)
+			)
+		)
 
 		# Calculate KL Divergence and EMD
 		emd_value = wasserstein_distance(signal, reconstructed_signal)
@@ -666,6 +762,9 @@ def process_swt_wavelet(signal: np.ndarray, wavelet: str, signal_type: str, max_
 			'padded': is_padded,
 			'emd_value': emd_value,
 			'kl_divergence': kl_div_value,
+			'change_point_indices': change_points['indices'],
+			'change_point_prominences': change_points['prominences'],
+			'num_change_points': len(change_points['indices']),
 			**additional_features,
 			**reconstructed_signal_metrics
 		})
